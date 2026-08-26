@@ -358,14 +358,20 @@ a.rq-source:hover{text-decoration:underline}
 .rq-customRowDisabled{opacity:.7;pointer-events:none}
 .rq-bankedChip{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary);border-radius:6px;padding:0 6px;font-size:11px;line-height:16px;flex:none}
 .rq-customIcon{color:var(--dsw-alias-label-tertiary);flex:none;margin-top:2px;display:inline-flex}
-.rq-footer{flex-shrink:0;justify-content:space-between;align-items:center;gap:12px;padding:8px 16px 2px;display:flex}
-.rq-pager{flex-shrink:0;align-items:center;gap:8px;display:flex}
+.rq-footer{flex-shrink:0;justify-content:space-between;align-items:stretch;gap:0;padding:0;border-top:1px solid var(--dsw-alias-border-l2-darkmode-thin);display:flex}
+.rq-pager{flex-shrink:0;align-items:center;gap:8px;display:flex;padding:0 8px 0 16px}
 .rq-progress{color:var(--dsw-alias-label-secondary);white-space:nowrap;font-size:13px;line-height:20px}
 .rq-bar{width:96px;height:3px;background:var(--dsw-alias-border-l2-darkmode-thin);border-radius:999px;overflow:hidden}
 .rq-barFill{height:100%;background:var(--dsw-alias-state-business-primary);border-radius:999px;transition:width 160ms ease}
-.rq-feedback{flex:1;min-width:0;color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:16px;overflow-wrap:anywhere}
-.rq-footerActions{flex-shrink:0;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:8px;display:flex}
-@media (width<=720px){.rq-card{border-radius:16px}.rq-header{padding:14px 12px 0 16px}.rq-body{padding:10px 0 2px}.rq-detail{padding:0 12px}.rq-intro{padding:0 12px}.rq-footer{flex-wrap:wrap;padding:8px 12px 2px}}`;
+.rq-feedback{flex:1;min-width:0;align-self:center;padding:0 12px;color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:16px;overflow-wrap:anywhere}
+.rq-footerActions{flex-shrink:0;align-items:stretch;display:flex;margin-left:auto}
+.rq-segBtn{background:0 0;border:none;border-left:1px solid var(--dsw-alias-border-l2-darkmode-thin);color:var(--dsw-alias-label-secondary);cursor:pointer;padding:0 14px;min-height:36px;font:inherit;font-size:13px;font-weight:400;line-height:20px;display:inline-flex;align-items:center;transition:background-color 120ms ease,color 120ms ease}
+.rq-footerActions .rq-segBtn:first-child{border-left:none}
+.rq-segBtn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.rq-segBtn:disabled{opacity:.45;cursor:default}
+.rq-segPrimary{color:var(--dsw-alias-state-business-primary);font-weight:500}
+.rq-segPrimary:hover:not(:disabled){color:var(--dsw-alias-state-business-primary)}
+@media (width<=720px){.rq-card{border-radius:16px}.rq-header{padding:14px 12px 0 16px}.rq-body{padding:10px 0 2px}.rq-detail{padding:0 12px}.rq-intro{padding:0 12px}.rq-footer{flex-wrap:wrap}.rq-pager{padding:0 8px 0 12px}}`;
 		const tagId = "dsh-rich-questions/survey-wizard.css";
 		if (typeof document !== "undefined" && document.querySelector('style[data-plugin-css="' + tagId + '"]') === null) {
 			const tag = document.createElement("style");
@@ -429,8 +435,9 @@ a.rq-source:hover{text-decoration:underline}
 				label: hint,
 				side: "top",
 				delayMs: 500,
-				children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
-					variant: "outline",
+				children: (0, react_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "rq-segBtn",
 					disabled,
 					onClick,
 					children
@@ -984,7 +991,7 @@ a.rq-source:hover{text-decoration:underline}
 									"data-survey-scroll": "true",
 									children: [
 										quickMode ? (0, react_jsx_runtime.jsx)("div", { className: "rq-detail", children: t("quick.subtitle") }) : null,
-										!quickMode && isIntro ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { text: spec.intro, className: "rq-intro" }) : null,
+										!quickMode && isIntro ? (0, react_jsx_runtime.jsx)("div", { className: "rq-intro", children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { text: spec.intro }) }) : null,
 										!quickMode && !isIntro && current.detail !== undefined ? (0, react_jsx_runtime.jsx)("div", { className: "rq-detail", children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { text: current.detail }) }) : null,
 										quickMode ? (0, react_jsx_runtime.jsx)("div", {
 											role: "radiogroup",
@@ -1078,8 +1085,9 @@ a.rq-source:hover{text-decoration:underline}
 													label: primaryHint,
 													side: "top",
 													delayMs: 500,
-													children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
-														variant: "primary",
+													children: (0, react_jsx_runtime.jsx)("button", {
+														type: "button",
+														className: "rq-segBtn rq-segPrimary",
 														disabled: busy !== null || (!isIntro && !currentAnswered),
 														onClick: advance,
 														children: primaryLabel

@@ -143,6 +143,7 @@ export function validateSpec(raw, limits = {}) {
       if (!Array.isArray(node.options)) fail(`${where}.options must be an array`)
       else {
         if (node.options.length > maxOptions) fail(`${where} has ${node.options.length} options (limit ${maxOptions})`)
+        if (node.options.length < 5) fail(`${where} has ${node.options.length} options — minimum 5 (keys a-e; the free-text input row is separate and not counted). If a question genuinely has fewer stances, fold it into another question; never pad with filler options.`)
         node.options.forEach((option, index) => {
           const oWhere = `${where}.options[${index}]`
           if (typeof option !== 'object' || option === null) { fail(`${oWhere} must be an object`); return }
