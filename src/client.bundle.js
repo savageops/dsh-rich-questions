@@ -301,14 +301,15 @@ window.__ModuleLoader__.load({
 .rq-iconButton{width:24px;height:24px;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:999px;place-items:center;padding:0;display:grid}
 .rq-iconButton:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .rq-iconButton:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}
-.rq-body{overscroll-behavior:contain;flex-direction:column;flex:auto;min-height:0;gap:10px;padding:12px 16px 4px;display:flex;overflow-y:auto}
-.rq-detail{margin:0 2px 2px}
+.rq-body{overscroll-behavior:contain;flex-direction:column;flex:auto;min-height:0;gap:10px;padding:12px 0 4px;display:flex;overflow-y:auto}
+.rq-detail{padding:0 16px}
+.rq-intro{padding:0 16px}
 /* Bleed rows (design-system E3/Invariant-2): the option list negates the
 body's horizontal padding so rows run edge-to-edge; separation between rows
 is a 1px border-bottom divider (never a stroke-as-container); the card's
 overflow:hidden clips the rounded corners. Rows keep their own inner padding
 so content aligns with the header/footer text. */
-.rq-options{flex-direction:column;gap:0;display:flex;margin:0 -16px}
+.rq-options{flex-direction:column;gap:0;display:flex}
 .rq-opt{width:100%;text-align:left;cursor:pointer;background:0 0;border:none;border-bottom:1px solid var(--dsw-alias-border-l2-darkmode-thin);border-radius:0;padding:10px 16px;display:flex;gap:10px;align-items:flex-start;font:inherit;color:inherit;transition:background-color 120ms ease;user-select:none}
 .rq-options .rq-opt:last-child{border-bottom:none}
 .rq-opt:hover{background:var(--dsw-alias-interactive-bg-hover)}
@@ -352,7 +353,7 @@ a.rq-source:hover{text-decoration:underline}
 .rq-diagram svg{width:100%;height:auto;max-height:224px;display:block}
 .rq-diagramLoading,.rq-diagramError{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px}
 .rq-diagramError{color:var(--dsw-alias-state-error-primary)}
-.rq-customRow{cursor:text;border:none;border-top:1px solid var(--dsw-alias-border-l2-darkmode-thin);border-radius:0;align-items:center;gap:10px;padding:10px 16px;margin:0 -16px;display:flex;transition:background-color 120ms ease}
+.rq-customRow{cursor:text;border:none;border-top:1px solid var(--dsw-alias-border-l2-darkmode-thin);border-radius:0;align-items:center;gap:10px;padding:10px 16px;display:flex;transition:background-color 120ms ease}
 .rq-customRowActive{background:var(--dsw-alias-interactive-bg-hover)}
 .rq-customRowDisabled{opacity:.7;pointer-events:none}
 .rq-bankedChip{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary);border-radius:6px;padding:0 6px;font-size:11px;line-height:16px;flex:none}
@@ -364,7 +365,7 @@ a.rq-source:hover{text-decoration:underline}
 .rq-barFill{height:100%;background:var(--dsw-alias-state-business-primary);border-radius:999px;transition:width 160ms ease}
 .rq-feedback{flex:1;min-width:0;color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:16px;overflow-wrap:anywhere}
 .rq-footerActions{flex-shrink:0;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:8px;display:flex}
-@media (width<=720px){.rq-card{border-radius:16px}.rq-header{padding:14px 12px 0 16px}.rq-body{padding:10px 12px 2px}.rq-footer{flex-wrap:wrap;padding:8px 12px 2px}.rq-options{margin:0 -12px}.rq-customRow{margin:0 -12px}}`;
+@media (width<=720px){.rq-card{border-radius:16px}.rq-header{padding:14px 12px 0 16px}.rq-body{padding:10px 0 2px}.rq-detail{padding:0 12px}.rq-intro{padding:0 12px}.rq-footer{flex-wrap:wrap;padding:8px 12px 2px}}`;
 		const tagId = "dsh-rich-questions/survey-wizard.css";
 		if (typeof document !== "undefined" && document.querySelector('style[data-plugin-css="' + tagId + '"]') === null) {
 			const tag = document.createElement("style");
@@ -983,7 +984,7 @@ a.rq-source:hover{text-decoration:underline}
 									"data-survey-scroll": "true",
 									children: [
 										quickMode ? (0, react_jsx_runtime.jsx)("div", { className: "rq-detail", children: t("quick.subtitle") }) : null,
-										!quickMode && isIntro ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { text: spec.intro }) : null,
+										!quickMode && isIntro ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { text: spec.intro, className: "rq-intro" }) : null,
 										!quickMode && !isIntro && current.detail !== undefined ? (0, react_jsx_runtime.jsx)("div", { className: "rq-detail", children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { text: current.detail }) }) : null,
 										quickMode ? (0, react_jsx_runtime.jsx)("div", {
 											role: "radiogroup",
