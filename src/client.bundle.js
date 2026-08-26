@@ -303,12 +303,18 @@ window.__ModuleLoader__.load({
 .rq-iconButton:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}
 .rq-body{overscroll-behavior:contain;flex-direction:column;flex:auto;min-height:0;gap:10px;padding:12px 16px 4px;display:flex;overflow-y:auto}
 .rq-detail{margin:0 2px 2px}
-.rq-options{flex-direction:column;gap:6px;display:flex}
-.rq-opt{width:100%;text-align:left;cursor:pointer;background:0 0;border:1px solid transparent;border-radius:12px;padding:8px 10px;display:flex;gap:10px;align-items:flex-start;font:inherit;color:inherit;transition:border-color 120ms ease,background-color 120ms ease;user-select:none}
+/* Bleed rows (design-system E3/Invariant-2): the option list negates the
+body's horizontal padding so rows run edge-to-edge; separation between rows
+is a 1px border-bottom divider (never a stroke-as-container); the card's
+overflow:hidden clips the rounded corners. Rows keep their own inner padding
+so content aligns with the header/footer text. */
+.rq-options{flex-direction:column;gap:0;display:flex;margin:0 -16px}
+.rq-opt{width:100%;text-align:left;cursor:pointer;background:0 0;border:none;border-bottom:1px solid var(--dsw-alias-border-l2-darkmode-thin);border-radius:0;padding:10px 16px;display:flex;gap:10px;align-items:flex-start;font:inherit;color:inherit;transition:background-color 120ms ease;user-select:none}
+.rq-options .rq-opt:last-child{border-bottom:none}
 .rq-opt:hover{background:var(--dsw-alias-interactive-bg-hover)}
-.rq-opt:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px}
+.rq-opt:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-2px}
 .rq-opt[aria-disabled="true"]{cursor:default;opacity:.7;pointer-events:none}
-.rq-optSelected{border-color:var(--dsw-alias-state-warn-secondary);background:color-mix(in srgb, var(--dsw-alias-state-warn-tertiary) 35%, transparent)}
+.rq-optSelected{background:color-mix(in srgb, var(--dsw-alias-state-warn-tertiary) 35%, transparent)}
 .rq-key{min-width:22px;height:22px;flex:none;border:1px solid var(--dsw-alias-border-l2-darkmode-thin);border-radius:7px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:20px;justify-content:center;align-items:center;margin-top:1px;display:inline-flex;overflow:hidden;padding:0 3px}
 .rq-optSelected .rq-key{border-color:var(--dsw-alias-state-warn-secondary);background:var(--dsw-alias-state-warn-tertiary);color:var(--dsw-alias-state-warn-primary)}
 .rq-box{width:18px;height:18px;flex:none;border:1px solid var(--dsw-alias-border-l2-darkmode-thin);border-radius:5px;margin-top:2px;justify-content:center;align-items:center;display:inline-flex}
@@ -346,8 +352,8 @@ a.rq-source:hover{text-decoration:underline}
 .rq-diagram svg{width:100%;height:auto;max-height:224px;display:block}
 .rq-diagramLoading,.rq-diagramError{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px}
 .rq-diagramError{color:var(--dsw-alias-state-error-primary)}
-.rq-customRow{cursor:text;border:1px solid var(--dsw-alias-border-l2-darkmode-thin);border-radius:12px;align-items:center;gap:10px;padding:8px 10px;display:flex}
-.rq-customRowActive{border-color:var(--dsw-alias-state-business-primary)}
+.rq-customRow{cursor:text;border:none;border-top:1px solid var(--dsw-alias-border-l2-darkmode-thin);border-radius:0;align-items:center;gap:10px;padding:10px 16px;margin:0 -16px;display:flex;transition:background-color 120ms ease}
+.rq-customRowActive{background:var(--dsw-alias-interactive-bg-hover)}
 .rq-customRowDisabled{opacity:.7;pointer-events:none}
 .rq-bankedChip{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary);border-radius:6px;padding:0 6px;font-size:11px;line-height:16px;flex:none}
 .rq-customIcon{color:var(--dsw-alias-label-tertiary);flex:none;margin-top:2px;display:inline-flex}
@@ -358,7 +364,7 @@ a.rq-source:hover{text-decoration:underline}
 .rq-barFill{height:100%;background:var(--dsw-alias-state-business-primary);border-radius:999px;transition:width 160ms ease}
 .rq-feedback{flex:1;min-width:0;color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:16px;overflow-wrap:anywhere}
 .rq-footerActions{flex-shrink:0;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:8px;display:flex}
-@media (width<=720px){.rq-card{border-radius:16px}.rq-header{padding:14px 12px 0 16px}.rq-body{padding:10px 12px 2px}.rq-footer{flex-wrap:wrap;padding:8px 12px 2px}}`;
+@media (width<=720px){.rq-card{border-radius:16px}.rq-header{padding:14px 12px 0 16px}.rq-body{padding:10px 12px 2px}.rq-footer{flex-wrap:wrap;padding:8px 12px 2px}.rq-options{margin:0 -12px}.rq-customRow{margin:0 -12px}}`;
 		const tagId = "dsh-rich-questions/survey-wizard.css";
 		if (typeof document !== "undefined" && document.querySelector('style[data-plugin-css="' + tagId + '"]') === null) {
 			const tag = document.createElement("style");
