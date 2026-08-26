@@ -134,7 +134,9 @@ export function validateSpec(raw, limits = {}) {
     if (typeof node.multiSelect !== 'undefined' && typeof node.multiSelect !== 'boolean') fail(`${where}.multiSelect must be a boolean`)
     if (typeof node.allowCustom !== 'undefined' && typeof node.allowCustom !== 'boolean') fail(`${where}.allowCustom must be a boolean`)
     if (typeof node.skippable !== 'undefined' && typeof node.skippable !== 'boolean') fail(`${where}.skippable must be a boolean`)
-    if (typeof node.next !== 'undefined' && typeof node.next !== 'string' && !Array.isArray(node.next)) fail(`${where}.next must be a question id or an id list`)
+    // `next: null` at question level is accepted as "no follow-up" (same as
+    // omitting it) — a natural authoring pattern, not an error.
+    if (typeof node.next !== 'undefined' && node.next !== null && typeof node.next !== 'string' && !Array.isArray(node.next)) fail(`${where}.next must be a question id, an id list, or null (= no follow-up)`)
 
     const keys = new Set()
     if (typeof node.options !== 'undefined') {
@@ -198,14 +200,52 @@ export function validateSpec(raw, limits = {}) {
             }
           }
           if (typeof answer.custom !== 'undefined' && typeof answer.custom !== 'string') fail(`${aWhere}.custom must be a string`)
+          // Submit-time rules enforced early, so a bad template dies here at
+          // authoring time instead of at user-click time.
+          const selectedKeys = Array.isArray(answer.selected) ? answer.selected : []
+          const customText = typeof answer.custom === 'string' ? answer.custom.trim() : ''
+          if (node.multiSelect !== true) {
+            if (selectedKeys.length > 1) fail(`${aWhere} selects ${selectedKeys.length} options on single-select question "${questionId}" — at most one`)
+            if (selectedKeys.length > 0 && customText !== '') fail(`${aWhere} combines options with custom text on single-select question "${questionId}" — use one or the other`)
+          }
+        }
+        // A template may only answer questions its own selections actually
+        // reach — anything else would be rejected at submit time anyway.
+        const quickAnswers = new Map()
+        for (const [questionId, answer] of Object.entries(quickOption.answers)) quickAnswers.set(questionId, {
+          selected: Array.isArray(answer?.selected) ? answer.selected : [],
+          custom: typeof answer?.custom === 'string' ? answer.custom : '',
+        })
+        const reachable = new Set(computePath({ entry, questions }, quickAnswers))
+        for (const questionId of Object.keys(quickOption.answers)) {
+          if (!reachable.has(questionId)) fail(`${qWhere}.answers includes "${questionId}" which this template's own selections never reach — remove it or adjust the selected keys so the branch passes through it`)
         }
       })
     }
   }
 
   // Referential integrity: every `next` (question- or option-level) must name
-  // an existing question id (or be null = branch end).
-  const refError = (where, ref) => fail(`${where} next "${ref}" names no question`)
+  // an existing question id (or be null = branch end). Dangling references
+  // get a self-repairing message: the nearest defined id and the id roster,
+  // so the model fixes it in exactly one retry.
+  const editDistance = (a, b) => {
+    if (Math.abs(a.length - b.length) > 2) return 3
+    const rows = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0))
+    for (let i = 0; i <= a.length; i += 1) rows[i][0] = i
+    for (let j = 0; j <= b.length; j += 1) rows[0][j] = j
+    for (let i = 1; i <= a.length; i += 1) for (let j = 1; j <= b.length; j += 1)
+      rows[i][j] = Math.min(rows[i - 1][j] + 1, rows[i][j - 1] + 1, rows[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1))
+    return rows[a.length][b.length]
+  }
+  const refError = (where, ref) => {
+    let nearest
+    for (const id of ids) {
+      const distance = editDistance(id, ref)
+      if (distance <= 2 && (nearest === undefined || distance < nearest.distance)) nearest = { id, distance }
+    }
+    const roster = ids.slice(0, 15).join(', ') + (ids.length > 15 ? `, …(+${ids.length - 15} more)` : '')
+    fail(`${where} next "${ref}" names no question${nearest !== undefined ? ` (did you mean "${nearest.id}"?)` : ''}. Defined ids: ${roster}. Add the missing question to the map, or fix the reference.`)
+  }
   for (const id of ids) {
     const node = questions[id]
     if (typeof node !== 'object' || node === null) continue

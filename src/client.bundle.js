@@ -177,8 +177,9 @@ window.__ModuleLoader__.load({
 			"diagram.error": "图表渲染失败",
 			"custom.placeholder": "输入你的答案",
 			"action.start": "开始",
+			"action.start.hint": "开始逐题作答——随时可以返回上一题或跳过。",
 			"action.reroll": "重掷",
-			"action.reroll.hint": "同一主题重新生成一版问卷：更简洁、更地道、更清晰的英文表达，去掉复杂措辞。",
+			"action.reroll.hint": "同一主题重新生成一版问卷：用你当前的语言，更简洁、更地道、更清晰的表达，去掉复杂措辞。",
 			"action.push": "深挖",
 			"action.push.hint": "先做一轮主动网络调研，挖掘竞品方法论、架构与情报，再据此把问卷加深加广后重新生成。",
 			"action.discuss": "讨论",
@@ -189,8 +190,11 @@ window.__ModuleLoader__.load({
 			"quick.title": "快速模式",
 			"quick.subtitle": "选择最贴近你目标的一项，自动套用全部答案并直接提交。",
 			"action.skip": "跳过",
+			"action.skip.hint": "本题不作答，直接进入下一题。",
 			"action.next": "下一题",
+			"action.next.hint": "保存本题答案并继续。",
 			"action.submit": "提交问卷",
+			"action.submit.hint": "把你的答案交回给 AI。",
 			"error.unanswered": "请先选择一个选项或填写答案。",
 			"nav.prev": "上一题",
 			"nav.cancel": "放弃问卷",
@@ -209,8 +213,9 @@ window.__ModuleLoader__.load({
 			"diagram.error": "Diagram failed to render",
 			"custom.placeholder": "Type your answer",
 			"action.start": "Start",
+			"action.start.hint": "Begin the question-by-question walk — you can go back or skip anytime.",
 			"action.reroll": "Reroll",
-			"action.reroll.hint": "Regenerate this survey on the same topic: cleaner, more well-spoken, competent English — no jargon, no complexity.",
+			"action.reroll.hint": "Regenerate this survey on the same topic: cleaner, more well-spoken, competent writing in your language — no jargon, no complexity.",
 			"action.push": "Push",
 			"action.push.hint": "Run aggressive web research first to gather competitor methods, architecture, and intelligence, then regenerate the survey deeper and broader.",
 			"action.discuss": "Discuss",
@@ -221,8 +226,11 @@ window.__ModuleLoader__.load({
 			"quick.title": "Quick mode",
 			"quick.subtitle": "Pick whichever is closest to what you want — it auto-fills every answer and submits right away.",
 			"action.skip": "Skip",
+			"action.skip.hint": "Leave this question unanswered and move on.",
 			"action.next": "Next",
+			"action.next.hint": "Save this answer and continue.",
 			"action.submit": "Submit survey",
+			"action.submit.hint": "Send your answers back to the agent.",
 			"error.unanswered": "Please select an option or type an answer first.",
 			"nav.prev": "Previous question",
 			"nav.cancel": "Dismiss the survey",
@@ -675,6 +683,7 @@ a.rq-source:hover{text-decoration:underline}
 			const discuss = () => respondTerminal("discuss");
 
 			const primaryLabel = isIntro ? t("action.start") : isLast ? t("action.submit") : t("action.next");
+			const primaryHint = isIntro ? t("action.start.hint") : isLast ? t("action.submit.hint") : t("action.next.hint");
 			const progressPct = path.length === 0 ? 0 : Math.round((answeredCount / path.length) * 100);
 			return (0, react_jsx_runtime.jsx)("div", {
 				className: "rq-frame",
@@ -702,24 +711,32 @@ a.rq-source:hover{text-decoration:underline}
 								(0, react_jsx_runtime.jsxs)("div", {
 									className: "rq-headerActions",
 									children: [
-										(0, react_jsx_runtime.jsx)("button", {
-											type: "button",
-											className: "rq-iconButton",
-											"aria-label": t(minimized ? "nav.maximize" : "nav.minimize"),
-											title: t(minimized ? "nav.maximize" : "nav.minimize"),
-											"aria-expanded": !minimized,
-											disabled: busy !== null,
-											onClick: () => setMinimized((value) => !value),
-											children: minimized ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutline14, {}) : (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronUpOutline14, {})
+										(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
+											label: t(minimized ? "nav.maximize" : "nav.minimize"),
+											side: "bottom",
+											delayMs: 500,
+											children: (0, react_jsx_runtime.jsx)("button", {
+												type: "button",
+												className: "rq-iconButton",
+												"aria-label": t(minimized ? "nav.maximize" : "nav.minimize"),
+												"aria-expanded": !minimized,
+												disabled: busy !== null,
+												onClick: () => setMinimized((value) => !value),
+												children: minimized ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutline14, {}) : (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronUpOutline14, {})
+											})
 										}),
-										(0, react_jsx_runtime.jsx)("button", {
-											type: "button",
-											className: "rq-iconButton",
-											"aria-label": t("nav.cancel"),
-											title: t("nav.cancel"),
-											disabled: busy !== null,
-											onClick: cancel,
-											children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCloseOutline16, {})
+										(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
+											label: t("nav.cancel"),
+											side: "bottom",
+											delayMs: 500,
+											children: (0, react_jsx_runtime.jsx)("button", {
+												type: "button",
+												className: "rq-iconButton",
+												"aria-label": t("nav.cancel"),
+												disabled: busy !== null,
+												onClick: cancel,
+												children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCloseOutline16, {})
+											})
 										})
 									]
 								})
@@ -779,13 +796,18 @@ a.rq-source:hover{text-decoration:underline}
 										(0, react_jsx_runtime.jsxs)("div", {
 											className: "rq-pager",
 											children: [
-												(0, react_jsx_runtime.jsx)("button", {
-													type: "button",
-													className: "rq-iconButton",
-													"aria-label": t("nav.prev"),
-													disabled: quickMode ? busy !== null : isIntro || cursor === (hasIntro ? -1 : 0) || busy !== null,
-													onClick: quickMode ? () => setQuickMode(false) : goBack,
-													children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronLeftOutline14, {})
+												(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
+													label: t("nav.prev"),
+													side: "top",
+													delayMs: 500,
+													children: (0, react_jsx_runtime.jsx)("button", {
+														type: "button",
+														className: "rq-iconButton",
+														"aria-label": t("nav.prev"),
+														disabled: quickMode ? busy !== null : isIntro || cursor === (hasIntro ? -1 : 0) || busy !== null,
+														onClick: quickMode ? () => setQuickMode(false) : goBack,
+														children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronLeftOutline14, {})
+													})
 												}),
 												quickMode || isIntro ? null : (0, react_jsx_runtime.jsx)("span", { className: "rq-bar", "aria-hidden": "true", children: (0, react_jsx_runtime.jsx)("span", { className: "rq-barFill", style: { width: `${progressPct}%` } }) }),
 												quickMode ? null : (0, react_jsx_runtime.jsx)("span", { className: "rq-progress", "aria-label": `${answeredCount} / ${path.length}`, children: isIntro ? `0 / ${String(path.length)}` : `${String(answeredCount)} / ${String(path.length)}` })
@@ -795,8 +817,8 @@ a.rq-source:hover{text-decoration:underline}
 										(0, react_jsx_runtime.jsxs)("div", {
 											className: "rq-footerActions",
 											children: [
-												!quickMode && !isIntro && current?.skippable !== false ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
-													variant: "outline",
+												!quickMode && !isIntro && current?.skippable !== false ? (0, react_jsx_runtime.jsx)(PreflightButton, {
+													hint: t("action.skip.hint"),
 													disabled: busy !== null,
 													onClick: skip,
 													children: t("action.skip")
@@ -804,11 +826,16 @@ a.rq-source:hover{text-decoration:underline}
 												// Quick mode replaces the whole footer with just the back arrow
 												// above — picking a template submits directly, there is nothing
 												// else to press.
-												quickMode ? null : (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
-													variant: "primary",
-													disabled: busy !== null || (!isIntro && !currentAnswered),
-													onClick: advance,
-													children: primaryLabel
+												quickMode ? null : (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
+													label: primaryHint,
+													side: "top",
+													delayMs: 500,
+													children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+														variant: "primary",
+														disabled: busy !== null || (!isIntro && !currentAnswered),
+														onClick: advance,
+														children: primaryLabel
+													})
 												}),
 												// Pre-flight redirects: only offered before the first question is
 												// answered — once the wizard has moved past the intro page,

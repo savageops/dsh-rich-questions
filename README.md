@@ -16,7 +16,8 @@ Turn flat `ask_user_question` exchanges into full questionnaires with conditiona
 - **Branching paths** — every option declares what follows it. Selecting *C* routes the user down an entirely different range of questions than *A*. Multi-select fans out depth-first, skip and free-text fall through cleanly, and the whole graph is validated up front (no cycles, no dangling references, unreachable questions never asked).
 - **Per-option intelligence** — insights, tradeoffs, "(today)" markers, citations, and **Mermaid flow diagrams** live inside the option row, revealed through deliberately non-invasive UX.
 - **Quick mode** — up to six whole-survey decision templates. One click applies a complete, coherent answer map and submits. The user who already knows they want "the Vercel-grade option set" never walks a single question.
-- **Pre-flight steering** — Reroll / Push / Discuss sit next to Start: rewrite the survey in cleaner English, push it deeper with web research, or drop the form and talk it through instead.
+- **Pre-flight steering** — Reroll / Push / Discuss sit next to Start: rewrite the survey in cleaner prose, push it deeper with web research, or drop the form and talk it through instead.
+- **Language-follows-user** — every survey is authored in the language the user is chatting in: English conversation → English content, 中文 → 中文， any other language → that language, one language consistently across the whole survey.
 
 ## Feature tour
 
@@ -92,7 +93,7 @@ Each template is a calibrated stance — "the highest standard, applied" — exp
 
 Before the first question, the user can redirect the entire exercise:
 
-- **Reroll** — same topic and branching intent, rewritten in cleaner, better-spoken English. No jargon, no complexity.
+- **Reroll** — same topic and branching intent, rewritten in cleaner, better-spoken prose in the user's own language. No jargon, no complexity.
 - **Push** — the survey comes back *deeper*: the agent runs web research on competitors and comparable systems, then expands the survey with research-grounded insights and more precise branching.
 - **Discuss** — skip the form; the topic moves to plain conversation until a direction converges.
 
@@ -106,7 +107,7 @@ Renders in the **same composer seat** as the built-in question card, so a pendin
 - Progress bar + answered/total counter against the *current* path
 - Back (re-evaluates branches from saved answers), Skip (per-question `skippable`), minimize, cancel
 - Multi-select with check boxes, free-text `other` row (`allowCustom`, on by default)
-- Bilingual out of the box (English / 简体中文), keyboard-operable rows, aria-labelled controls
+- UI chrome localizes automatically (English / 简体中文, graceful fallback for any other locale); survey *content* follows the conversation's language by instruction — the authoring model is told, in both English and Chinese, to match the user's language end to end. Keyboard-operable rows, aria-labelled controls.
 - **Host-authoritative**: the pending survey lives on the host. Close the tab, refresh, come back from another browser — the survey rehydrates (SSE + reconciliation) and the tool keeps waiting the whole time. Routes are loopback-fenced like the rest of the DSH web surface.
 
 ## Authoring guide
@@ -157,7 +158,7 @@ Full spec with every capability in one place:
 }
 ```
 
-**Validation (submit-time, host-side).** `entry` exists; every `next` names a real question; option keys unique per question; the graph is cycle-free; quick templates reference only real questions/options and their answers cover their reachable path; size caps hold (150 questions, 40 options/question, 1500-char insights, 1200-char diagrams, 8 sources, 6 quick templates). Unreachable questions are never asked and never answered.
+**Validation (submit-time, host-side).** `entry` exists; every `next` names a real question (question-level `next: null` = no follow-up, same as omitting); option keys unique per question; the graph is cycle-free; quick templates reference only real questions/options, and their answers cover only what their own selections reach; size caps hold (150 questions, 40 options/question, 1500-char insights, 1200-char diagrams, 8 sources, 6 quick templates). Unreachable questions are never asked and never answered. Rejected specs get a self-repairing message: the exact offending spot, the nearest defined id for dangling references, and the full id roster — one retry fixes it.
 
 **Result — completed survey:**
 
