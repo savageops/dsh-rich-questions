@@ -35,7 +35,8 @@ Restart the `dsh web` process, refresh the tab — done. The `ask_survey` tool i
 | | |
 |---|---|
 | **Branching paths** | Every option declares what follows it (`next`). Choose *C*, get a different range of questions than *A*. Multi-select fans out depth-first; skipped/free-text fall through cleanly; the host re-derives the path independently so claimed paths are always verifiable. |
-| **Per-option intelligence** | Insights (~6 lines: what great looks like / the tradeoff / "(today)"), sources and citations, and compact **Mermaid diagrams** — revealed through a 3-second-delayed tooltip and click-to-expand, never a hover ambush. |
+| **Per-option intelligence** | Insights (~6 lines: what great looks like / the tradeoff / "(today)"), sources and citations, and compact **Mermaid diagrams** — all behind one click-to-expand disclosure (`?` for text, the branch icon for the diagram); no hover ambushes, ever. |
+| **Justify** | Selected options gain a pencil affordance: state *why* you chose this option in one line (inline input, checkmark or Enter submits, re-editable any time before submit). The why rides the answer as `justifications` — the agent reads your stated intent when deriving follow-ups. |
 | **Quick mode** | Up to six whole-survey decision templates (`a`–`f`) next to Start — "Ship like Vercel/Railway: polish + DX first" vs "Lean internal tool: ship fast". One click applies a complete, coherent answer map and submits. A 20-question alignment exercise becomes a single decision. |
 | **Bank & continue** | Per-step commit for long surveys: answers-so-far go to the host *in the background* while you advance immediately. Banked answers **lock** (view-only forever after), survive reloads, and follow you to any browser. A `{n} banked` chip tracks them. |
 | **Durable progress** | Drafts autosave per survey — reload, switch tabs, come back tomorrow: same question, same answers, same position. Nothing to press. |
@@ -71,7 +72,8 @@ Renders in the composer seat, one question per page over the live branch path:
 
 - Progress bar + answered/total against the *current* path; back re-evaluates branches from saved answers
 - Multi-select with checkboxes, free-text `other` row, per-question `skippable`
-- Every button explained by a delayed tooltip — Start/Next/Submit (contextual), Skip, Bank, Quick, Reroll, Push, Discuss, back, minimize, cancel
+- **Bleed-row grammar**: option rows run edge-to-edge of the card, split by 1px hairline dividers (no floating chips); the free-text row bleeds with its own divider, and the footer is a bleed toolbar — action buttons float right as full-height segments separated by vertical hairlines, the back arrow and progress staying left
+- Every action button explained by a delayed tooltip — Start/Next/Submit (contextual), Skip, Bank, Quick, Reroll, Push, Discuss, back, minimize, cancel
 - Keyboard-operable rows, aria-labelled controls; UI chrome localizes (EN / 简体中文, graceful fallback elsewhere)
 - Host-authoritative pending state, loopback-fenced routes, SSE + poll rehydration
 
@@ -130,7 +132,7 @@ One spec, every capability:
 | Skipped / free-text-only | the question-level `next` |
 | Nothing left / `next: null` | the survey finishes |
 
-**Validation is self-repairing.** Every rule is checked host-side at authoring time: `entry` exists, every `next` names a real question (question-level `null` = no follow-up), no cycles, option keys unique, quick templates reference only reachable questions with real option keys, size caps hold (150 questions / 40 options / 1500-char insights / 1200-char diagrams / 8 sources / 6 templates). Rejected specs get the exact offending spot, the **nearest defined id** for dangling references, and the **full id roster** — one retry fixes it.
+**Validation is self-repairing.** Every rule is checked host-side at authoring time: `entry` exists, every `next` names a real question (question-level `null` = no follow-up), no cycles, option keys unique, quick templates reference only reachable questions with real option keys, every option-bearing question carries **at least 5 options** (keys a–e, aim 5–8 — genuinely distinct stances; the free-text row is separate and uncounted), size caps hold (150 questions / 40 options / 1500-char insights / 1200-char diagrams / 8 sources / 6 templates / 500-char justifications). Rejected specs get the exact offending spot, the **nearest defined id** for dangling references, and the **full id roster** — one retry fixes it.
 
 ## Result shapes
 
