@@ -128,7 +128,7 @@ class SurveyHostService {
     if (signal?.aborted === true) return Promise.reject(new SurveyError('ask_survey was aborted before the user answered', 'SURVEY_ABORTED'))
     return new Promise((resolve, reject) => {
       const surveyId = randomUUID()
-      const entry = { surveyId, sessionId, spec, createdAt: Date.now(), resolve, reject, onAbort: undefined }
+      const entry = { surveyId, sessionId, spec, createdAt: Date.now(), resolve, reject, onAbort: undefined, banked: new Map() }
       if (signal !== undefined) {
         entry.onAbort = () => this.settle(surveyId, { outcome: 'cancelled' })
         signal.addEventListener('abort', entry.onAbort, { once: true })
@@ -145,7 +145,31 @@ class SurveyHostService {
       sessionId: entry.sessionId,
       createdAt: entry.createdAt,
       spec: entry.spec,
+      // Banked answers ride the snapshot so a refreshed/other browser
+      // restores them as locked drafts (host is the authority for banked).
+      ...(entry.banked.size > 0 ? { banked: this.#bankedSnapshot(entry) } : {}),
     }))
+  }
+
+  #bankedSnapshot(entry) {
+    return [...entry.banked.values()].map((answer) => ({ id: answer.id, selected: answer.selected, ...(answer.custom !== undefined ? { custom: answer.custom } : {}) }))
+  }
+
+  /**
+   * Write-ahead bank (wizard-style per-step commit): validate answers-so-far
+   * and store them on the pending entry WITHOUT settling the tool call. The
+   * user keeps walking; a refresh or another browser rehydrates banked
+   * answers from state()/hello as locked. The final `answer` is unchanged —
+   * it still carries the full set (banked included).
+   */
+  bank({ surveyId, answers }) {
+    const entry = this.#pending.get(surveyId)
+    if (entry === undefined) return { ok: false, error: 'not-pending' }
+    const check = validateAnswers(entry.spec, answers)
+    if (!check.ok) return { ok: false, error: check.errors.join('; ') }
+    for (const answer of check.answers) entry.banked.set(answer.id, answer)
+    this.#emit({ type: 'survey/banked', surveyId, sessionId: entry.sessionId, banked: this.#bankedSnapshot(entry) })
+    return { ok: true, banked: entry.banked.size }
   }
 
   answer({ surveyId, answers }) {
@@ -239,6 +263,8 @@ function makeRoutes(service) {
       const { kind, surveyId } = body
       const handlers = {
         answer: () => service.answer({ surveyId, answers: body.answers }),
+        // Write-ahead bank: commit answers-so-far without ending the survey.
+        bank: () => service.bank({ surveyId, answers: body.answers }),
         cancel: () => service.cancel({ surveyId }),
         // Pre-flight redirects, offered only on the intro page next to
         // "Start": reroll asks for a clearer rewrite, push asks for deeper

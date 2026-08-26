@@ -90,7 +90,7 @@ window.__ModuleLoader__.load({
 				for (const survey of surveys) {
 					const current = bySession.get(survey.sessionId);
 					if (current?.surveyId !== survey.surveyId) {
-						bySession.set(survey.sessionId, { surveyId: survey.surveyId, sessionId: survey.sessionId, spec: survey.spec, createdAt: survey.createdAt });
+						bySession.set(survey.sessionId, { surveyId: survey.surveyId, sessionId: survey.sessionId, spec: survey.spec, createdAt: survey.createdAt, ...(Array.isArray(survey.banked) ? { banked: survey.banked } : {}) });
 						changed = true;
 					}
 				}
@@ -100,6 +100,16 @@ window.__ModuleLoader__.load({
 				if (frame.type === "survey/requested") {
 					if (bySession.get(frame.sessionId)?.surveyId !== frame.surveyId) {
 						bySession.set(frame.sessionId, { surveyId: frame.surveyId, sessionId: frame.sessionId, spec: frame.spec, createdAt: frame.createdAt ?? Date.now() });
+						notify();
+					}
+				} else if (frame.type === "survey/banked") {
+					// Another tab banked answers: merge into the stored survey so
+					// its wizard can adopt them as locked drafts.
+					const current = bySession.get(frame.sessionId);
+					if (current?.surveyId === frame.surveyId && Array.isArray(frame.banked)) {
+						const merged = new Map((current.banked ?? []).map((answer) => [answer.id, answer]));
+						for (const answer of frame.banked) merged.set(answer.id, answer);
+						bySession.set(frame.sessionId, { ...current, banked: [...merged.values()] });
 						notify();
 					}
 				} else if (frame.type === "survey/resolved") {
@@ -191,6 +201,9 @@ window.__ModuleLoader__.load({
 			"quick.subtitle": "选择最贴近你目标的一项，自动套用全部答案并直接提交。",
 			"action.skip": "跳过",
 			"action.skip.hint": "本题不作答，直接进入下一题。",
+			"action.bank": "暂存并继续",
+			"action.bank.hint": "把到目前为止的答案立刻提交到后台暂存（此后不可再修改），随即继续下一题——中途刷新或换浏览器也不会丢。",
+			"bank.count": "已暂存 {n}",
 			"action.next": "下一题",
 			"action.next.hint": "保存本题答案并继续。",
 			"action.submit": "提交问卷",
@@ -227,6 +240,9 @@ window.__ModuleLoader__.load({
 			"quick.subtitle": "Pick whichever is closest to what you want — it auto-fills every answer and submits right away.",
 			"action.skip": "Skip",
 			"action.skip.hint": "Leave this question unanswered and move on.",
+			"action.bank": "Bank & continue",
+			"action.bank.hint": "Commit your answers so far to the host in the background — they lock and survive a reload or another browser — then continue to the next question.",
+			"bank.count": "{n} banked",
 			"action.next": "Next",
 			"action.next.hint": "Save this answer and continue.",
 			"action.submit": "Submit survey",
@@ -237,6 +253,31 @@ window.__ModuleLoader__.load({
 			"nav.minimize": "Collapse the survey card",
 			"nav.maximize": "Expand the survey card"
 		};
+		//#endregion
+		//#region lib/draft-store.js
+		/**
+		 * Best-effort local draft persistence, keyed by surveyId: a reload or
+		 * tab switch never loses half-answered progress. localStorage tier
+		 * covers the same browser; banked answers (host side) cover any
+		 * browser. All operations are fail-safe — persistence must never
+		 * break the wizard (private mode, quota, disabled storage).
+		 */
+		const DRAFT_PREFIX = "dsh-rich-questions/draft/";
+		function loadDraftState(surveyId) {
+			try {
+				const raw = window.localStorage.getItem(DRAFT_PREFIX + surveyId);
+				if (raw === null) return null;
+				const parsed = JSON.parse(raw);
+				if (parsed === null || typeof parsed !== "object" || parsed.v !== 1 || typeof parsed.drafts !== "object" || parsed.drafts === null) return null;
+				return parsed;
+			} catch { return null }
+		}
+		function saveDraftState(surveyId, value) {
+			try { window.localStorage.setItem(DRAFT_PREFIX + surveyId, JSON.stringify(value)) } catch { /* best-effort */ }
+		}
+		function clearDraftState(surveyId) {
+			try { window.localStorage.removeItem(DRAFT_PREFIX + surveyId) } catch { /* best-effort */ }
+		}
 		//#endregion
 		//#region lib/styles.css
 		const css = `.rq-frame{padding:6px calc(var(--dsh-composer-side-clearance) + 16px) 10px;justify-content:center;display:flex}
@@ -295,6 +336,8 @@ a.rq-source:hover{text-decoration:underline}
 .rq-diagramError{color:var(--dsw-alias-state-error-primary)}
 .rq-customRow{cursor:text;border:1px solid var(--dsw-alias-border-l2-darkmode-thin);border-radius:12px;align-items:center;gap:10px;padding:8px 10px;display:flex}
 .rq-customRowActive{border-color:var(--dsw-alias-state-business-primary)}
+.rq-customRowDisabled{opacity:.7;pointer-events:none}
+.rq-bankedChip{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary);border-radius:6px;padding:0 6px;font-size:11px;line-height:16px;flex:none}
 .rq-customIcon{color:var(--dsw-alias-label-tertiary);flex:none;margin-top:2px;display:inline-flex}
 .rq-footer{flex-shrink:0;justify-content:space-between;align-items:center;gap:12px;padding:8px 16px 2px;display:flex}
 .rq-pager{flex-shrink:0;align-items:center;gap:8px;display:flex}
@@ -317,7 +360,7 @@ a.rq-source:hover{text-decoration:underline}
 		/** Free-text answer row (shared shape with the built-in composer). */
 		function CustomRow({ value, placeholder, disabled, active, onChange, onEnter, t }) {
 			return (0, react_jsx_runtime.jsxs)("div", {
-				className: cx("rq-customRow", active && "rq-customRowActive"),
+				className: cx("rq-customRow", active && "rq-customRowActive", disabled && "rq-customRowDisabled"),
 				children: [
 					(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconEditOutline16, { size: 13, className: "rq-customIcon" }),
 					(0, react_jsx_runtime.jsx)("input", {
@@ -542,11 +585,43 @@ a.rq-source:hover{text-decoration:underline}
 		function SurveyFlow({ survey, t }) {
 			const spec = survey.spec;
 			const hasIntro = typeof spec.intro === "string" && spec.intro.trim() !== "";
-			const [drafts, setDrafts] = (0, react.useState)(() => ({}));
-			const [cursor, setCursor] = (0, react.useState)(hasIntro ? -1 : 0);
+			// Restore progress across reloads / tab switches: local drafts from
+			// localStorage (same browser), banked answers from the host snapshot
+			// (any browser — the host is the authority for banked). Banked
+			// answers land as locked drafts and win over any local copy.
+			const restored = (0, react.useMemo)(() => {
+				const persisted = loadDraftState(survey.surveyId);
+				const drafts = {};
+				if (persisted !== null) {
+					for (const [questionId, draft] of Object.entries(persisted.drafts)) {
+						if (questionId === "" || typeof draft !== "object" || draft === null) continue;
+						drafts[questionId] = {
+							selected: Array.isArray(draft.selected) ? draft.selected.filter((key) => typeof key === "string") : [],
+							custom: typeof draft.custom === "string" ? draft.custom : "",
+							skipped: draft.skipped === true
+						};
+					}
+				}
+				const bankedIds = new Set(Array.isArray(persisted?.banked) ? persisted.banked.filter((id) => typeof id === "string") : []);
+				if (Array.isArray(survey.banked)) {
+					for (const answer of survey.banked) {
+						if (typeof answer?.id !== "string" || spec.questions[answer.id] === undefined) continue;
+						drafts[answer.id] = { selected: Array.isArray(answer.selected) ? answer.selected : [], custom: typeof answer.custom === "string" ? answer.custom : "", skipped: false };
+						bankedIds.add(answer.id);
+					}
+				}
+				const cursor = typeof persisted?.cursor === "number" ? persisted.cursor : undefined;
+				return { drafts, bankedIds, cursor, quickMode: persisted?.quickMode === true };
+			}, [survey.surveyId]);
+			const [drafts, setDrafts] = (0, react.useState)(() => restored.drafts);
+			const [cursor, setCursor] = (0, react.useState)(() => restored.cursor !== undefined ? restored.cursor : hasIntro ? -1 : 0);
 			const [busy, setBusy] = (0, react.useState)(null);
 			const [error, setError] = (0, react.useState)(null);
 			const [minimized, setMinimized] = (0, react.useState)(false);
+			// Questions whose answers were banked (committed to the host):
+			// view-only from then on — you can go back and read them, never
+			// re-answer. (Before the host learns "bank", this set is empty.)
+			const [bankedIds, setBankedIds] = (0, react.useState)(() => restored.bankedIds);
 			// At most one option's panel is pinned open at a time (accordion),
 			// shared between the two content modes (text insight vs. diagram);
 			// never survives a question change.
@@ -555,8 +630,39 @@ a.rq-source:hover{text-decoration:underline}
 			// whole-survey answer templates instead of the question-by-question
 			// walk. Purely a client-side view switch — nothing to ask the host
 			// until a template is actually picked (which submits like any answer).
-			const [quickMode, setQuickMode] = (0, react.useState)(false);
+			const [quickMode, setQuickMode] = (0, react.useState)(() => restored.quickMode);
 			const hasQuick = Array.isArray(spec.quick) && spec.quick.length > 0;
+
+			// Persist on every change (best-effort; tiny payloads).
+			(0, react.useEffect)(() => {
+				saveDraftState(survey.surveyId, { v: 1, drafts, cursor, quickMode, banked: [...bankedIds], savedAt: Date.now() });
+			}, [survey.surveyId, drafts, cursor, quickMode, bankedIds]);
+			// Adopt banked answers arriving later (another tab banked, or the
+			// SSE hello frame landed after mount): they override local drafts.
+			(0, react.useEffect)(() => {
+				if (!Array.isArray(survey.banked) || survey.banked.length === 0) return;
+				setDrafts((value) => {
+					let changed = false;
+					const next = { ...value };
+					for (const answer of survey.banked) {
+						if (typeof answer?.id !== "string" || spec.questions[answer.id] === undefined) continue;
+						const nextDraft = { selected: Array.isArray(answer.selected) ? answer.selected : [], custom: typeof answer.custom === "string" ? answer.custom : "", skipped: false };
+						const prev = value[answer.id];
+						if (prev !== undefined && prev.selected.join("\u0000") === nextDraft.selected.join("\u0000") && prev.custom === nextDraft.custom && bankedIds.has(answer.id)) continue;
+						next[answer.id] = nextDraft;
+						changed = true;
+					}
+					return changed ? next : value;
+				});
+				setBankedIds((value) => {
+					const next = new Set(value);
+					let changed = false;
+					for (const answer of survey.banked) {
+						if (typeof answer?.id === "string" && spec.questions[answer.id] !== undefined && !next.has(answer.id)) { next.add(answer.id); changed = true; }
+					}
+					return changed ? next : value;
+				});
+			}, [survey.banked]);
 
 			const toAnswers = (draftsValue) => {
 				const map = new Map();
@@ -586,8 +692,10 @@ a.rq-source:hover{text-decoration:underline}
 			const options = current?.options ?? [];
 			const allowCustom = current?.allowCustom !== false;
 
+			const isBanked = currentId !== undefined && bankedIds.has(currentId);
+
 			const updateDraft = (update) => {
-				if (currentId === undefined) return;
+				if (currentId === undefined || bankedIds.has(currentId)) return;
 				setDrafts((value) => ({ ...value, [currentId]: update(value[currentId] ?? { selected: [], custom: "", skipped: false }) }));
 				setError(null);
 			};
@@ -622,8 +730,44 @@ a.rq-source:hover{text-decoration:underline}
 				});
 				setBusy("answer");
 				setError(null);
-				surveyStore.respond(survey.surveyId, { kind: "answer", answers: entries, path: surveyPath }).then(() => surveyStore.forget(survey.sessionId)).catch((cause) => {
+				surveyStore.respond(survey.surveyId, { kind: "answer", answers: entries, path: surveyPath }).then(() => {
+					clearDraftState(survey.surveyId);
+					surveyStore.forget(survey.sessionId);
+				}).catch((cause) => {
 					setBusy(null);
+					setError(cause instanceof Error ? cause.message : String(cause));
+				});
+			};
+			/**
+			 * Bank & continue (wizard-style per-step commit for long surveys):
+			 * fire the bank request with every answered-so-far entry, advance
+			 * immediately (the bank runs in the background), and lock the banked
+			 * questions only once the host confirms. On failure nothing locks —
+			 * the answers stay local and editable, with the error surfaced.
+			 */
+			const bankAndContinue = () => {
+				if (!currentAnswered || isBanked || isLast) return;
+				const entries = path
+					.filter((questionId) => answeredOf(drafts[questionId]))
+					.map((questionId) => {
+						const value = drafts[questionId];
+						const custom = value.custom.trim();
+						const multi = spec.questions[questionId]?.multiSelect === true;
+						return {
+							id: questionId,
+							selected: custom === "" || multi ? value.selected : [],
+							...custom === "" ? {} : { custom }
+						};
+					});
+				setCursor((value) => value + 1);
+				setError(null);
+				surveyStore.respond(survey.surveyId, { kind: "bank", answers: entries }).then(() => {
+					setBankedIds((value) => {
+						const next = new Set(value);
+						for (const entry of entries) next.add(entry.id);
+						return next;
+					});
+				}).catch((cause) => {
 					setError(cause instanceof Error ? cause.message : String(cause));
 				});
 			};
@@ -656,7 +800,7 @@ a.rq-source:hover{text-decoration:underline}
 				setError(null);
 			};
 			const skip = () => {
-				if (currentId === undefined || current?.skippable === false) return;
+				if (currentId === undefined || current?.skippable === false || bankedIds.has(currentId)) return;
 				const nextDrafts = { ...drafts, [currentId]: { selected: [], custom: "", skipped: true } };
 				const nextPath = computePath(spec, toAnswers(nextDrafts));
 				setDrafts(nextDrafts);
@@ -666,11 +810,15 @@ a.rq-source:hover{text-decoration:underline}
 			};
 			// Shared by every terminal, non-answer action (cancel + the three
 			// intro-page pre-flight redirects): fire the request, mark busy,
-			// forget the survey once the host confirms.
+			// forget the survey once the host confirms. The survey is over —
+			// drop the local draft copy too.
 			const respondTerminal = (kind) => {
 				setBusy(kind);
 				setError(null);
-				surveyStore.respond(survey.surveyId, { kind }).then(() => surveyStore.forget(survey.sessionId)).catch((cause) => {
+				surveyStore.respond(survey.surveyId, { kind }).then(() => {
+					clearDraftState(survey.surveyId);
+					surveyStore.forget(survey.sessionId);
+				}).catch((cause) => {
 					setBusy(null);
 					setError(cause instanceof Error ? cause.message : String(cause));
 				});
@@ -772,7 +920,7 @@ a.rq-source:hover{text-decoration:underline}
 												option,
 												multi: current.multiSelect === true,
 												selected: draft.selected.includes(option.key),
-												disabled: busy !== null,
+												disabled: busy !== null || isBanked,
 												expandedMode: expanded !== null && expanded.key === option.key ? expanded.mode : null,
 												onChoose: choose,
 												onToggleExpand: (mode) => toggleExpand(option.key, mode),
@@ -782,7 +930,7 @@ a.rq-source:hover{text-decoration:underline}
 										!quickMode && !isIntro && allowCustom ? (0, react_jsx_runtime.jsx)(CustomRow, {
 											value: draft.custom,
 											placeholder: t("custom.placeholder"),
-											disabled: busy !== null,
+											disabled: busy !== null || isBanked,
 											active: draft.custom.trim() !== "",
 											onChange: onCustom,
 											onEnter: advance,
@@ -810,7 +958,8 @@ a.rq-source:hover{text-decoration:underline}
 													})
 												}),
 												quickMode || isIntro ? null : (0, react_jsx_runtime.jsx)("span", { className: "rq-bar", "aria-hidden": "true", children: (0, react_jsx_runtime.jsx)("span", { className: "rq-barFill", style: { width: `${progressPct}%` } }) }),
-												quickMode ? null : (0, react_jsx_runtime.jsx)("span", { className: "rq-progress", "aria-label": `${answeredCount} / ${path.length}`, children: isIntro ? `0 / ${String(path.length)}` : `${String(answeredCount)} / ${String(path.length)}` })
+												quickMode ? null : (0, react_jsx_runtime.jsx)("span", { className: "rq-progress", "aria-label": `${answeredCount} / ${path.length}`, children: isIntro ? `0 / ${String(path.length)}` : `${String(answeredCount)} / ${String(path.length)}` }),
+												quickMode || isIntro || bankedIds.size === 0 ? null : (0, react_jsx_runtime.jsx)("span", { className: "rq-bankedChip", "aria-label": t("bank.count").replace("{n}", String(bankedIds.size)), children: t("bank.count").replace("{n}", String(bankedIds.size)) })
 											]
 										}),
 										(0, react_jsx_runtime.jsx)("div", { className: "rq-feedback", role: "status", children: error }),
@@ -822,6 +971,16 @@ a.rq-source:hover{text-decoration:underline}
 													disabled: busy !== null,
 													onClick: skip,
 													children: t("action.skip")
+												}) : null,
+												// Bank & continue: per-step commit for long surveys — answers-so-far go to
+												// the host in the background and lock; the walk advances immediately.
+												// Hidden once the current question is banked (nothing left to commit)
+												// and on the last question (Submit already carries everything).
+												!quickMode && !isIntro && !isLast && !isBanked ? (0, react_jsx_runtime.jsx)(PreflightButton, {
+													hint: t("action.bank.hint"),
+													disabled: busy !== null || !currentAnswered,
+													onClick: bankAndContinue,
+													children: t("action.bank")
 												}) : null,
 												// Quick mode replaces the whole footer with just the back arrow
 												// above — picking a template submits directly, there is nothing

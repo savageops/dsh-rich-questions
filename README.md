@@ -106,6 +106,8 @@ Renders in the **same composer seat** as the built-in question card, so a pendin
 - One question per page over the live branch path
 - Progress bar + answered/total counter against the *current* path
 - Back (re-evaluates branches from saved answers), Skip (per-question `skippable`), minimize, cancel
+- **Durable progress**: drafts autosave locally per survey — a reload or tab switch resumes exactly where you were (question, answers, quick mode). Nothing to press; it just survives.
+- **Bank & continue** (long surveys): next to Next, a per-step commit — answers-so-far go to the host *in the background* while the walk advances immediately. Banked answers lock (view-only when you go back — you can read them, never re-answer), survive reloads, and rehydrate on **any** browser from the host, not just the one that banked them. A `{n} banked` chip in the pager tracks them. On the last question the button steps aside — Submit already carries everything.
 - Multi-select with check boxes, free-text `other` row (`allowCustom`, on by default)
 - UI chrome localizes automatically (English / 简体中文, graceful fallback for any other locale); survey *content* follows the conversation's language by instruction — the authoring model is told, in both English and Chinese, to match the user's language end to end. Keyboard-operable rows, aria-labelled controls.
 - **Host-authoritative**: the pending survey lives on the host. Close the tab, refresh, come back from another browser — the survey rehydrates (SSE + reconciliation) and the tool keeps waiting the whole time. Routes are loopback-fenced like the rest of the DSH web surface.
