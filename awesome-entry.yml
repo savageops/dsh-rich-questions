@@ -1,0 +1,18 @@
+# Prepared entry for the awesome-dsh-plugin registry (https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)
+# Submission: PR adding data/plugins/savageops__dsh-rich-questions.yml + regenerated READMEs
+# (cd into a clone of awesome-dsh-plugin/awesome-dsh-plugin, then: npm ci && node scripts/generate-readme.mjs)
+#
+# Eligibility checklist (CI-checked):
+#   [x] dsh.bundle manifest in package.json (+ cordis.patch.yml)
+#   [x] real working code
+#   [ ] repo >= 1 day old          <- created 2026-08-26, submit from 2026-08-27
+#   [ ] >= 10 commits              <- count before submitting (this file's commit counts)
+#   [x] dsh-plugin GitHub topic on savageops/dsh-rich-questions
+#   [x] factual description, no marketing
+#   [x] category matches what it does (tools: model-facing ask_survey tool)
+url: https://github.com/savageops/dsh-rich-questions
+name: savageops/dsh-rich-questions
+category: tools
+description:
+  en: 'Branching surveys in the web GUI: the ask_survey tool with per-option routing, hover insights, Mermaid diagrams, quick one-click answer templates, and resumable banked progress.'
+  zh: '网页端分支问卷：ask_survey 工具，按选项路由后续问题，悬停洞察、Mermaid 流程图、一键快速模板，答案可暂存续答。'
