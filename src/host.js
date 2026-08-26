@@ -423,6 +423,7 @@ function surveyToolDefinition(ctx, service) {
                 id: { type: 'string' },
                 selected: { type: 'array', items: { type: 'object', required: ['key', 'label'], properties: { key: { type: 'string' }, label: { type: 'string' } } } },
                 custom: { type: 'string' },
+                justifications: { type: 'object', description: 'Present when the user justified choices: option key -> why text (the user typed WHY they chose that option; treat it as their stated intent when deriving follow-ups).' },
               },
             },
           },
@@ -466,6 +467,7 @@ function surveyToolDefinition(ctx, service) {
             id,
             selected: answer.selected.map((key) => ({ key, label: (node.options ?? []).find((option) => option.key === key)?.label ?? key })),
             ...(answer.custom !== undefined ? { custom: answer.custom } : {}),
+            ...(answer.justifications !== undefined ? { justifications: answer.justifications } : {}),
           })
         } else {
           skipped.push(id)

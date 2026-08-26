@@ -322,7 +322,26 @@ export function validateAnswers(spec, answers) {
       if (selected.length > 1) errors.push(`answers for "${id}" selects ${selected.length} options on a single-select question`)
       if (trimmed !== '' && selected.length > 0) errors.push(`answers for "${id}" combines options with custom text on a single-select question`)
     }
-    clean.push({ id, selected, ...(trimmed === '' ? {} : { custom: trimmed }) })
+    // Justifications: the user's why for chosen options. Object keyed by
+    // option key; keys must be among the selected options, values non-empty
+    // strings <= 500 chars; empty strings are dropped, not errors.
+    let justifications
+    if (answer.justifications !== undefined) {
+      if (typeof answer.justifications !== 'object' || answer.justifications === null || Array.isArray(answer.justifications)) {
+        errors.push(`answers for "${id}": justifications must be an object of option key -> why text`)
+      } else {
+        const kept = {}
+        for (const [key, why] of Object.entries(answer.justifications)) {
+          if (!selected.includes(key)) { errors.push(`answers for "${id}": justification names key "${key}" which is not a selected option`); continue }
+          if (typeof why !== 'string') { errors.push(`answers for "${id}": justification for "${key}" must be a string`); continue }
+          if (why.trim() === '') continue // whitespace-only: drop silently, never bounce the batch
+          if (why.length > 500) { errors.push(`answers for "${id}": justification for "${key}" exceeds 500 characters`); continue }
+          kept[key] = why.trim()
+        }
+        if (Object.keys(kept).length > 0) justifications = kept
+      }
+    }
+    clean.push({ id, selected, ...(trimmed === '' ? {} : { custom: trimmed }), ...(justifications !== undefined ? { justifications } : {}) })
   }
   if (errors.length > 0) return { ok: false, errors }
   return { ok: true, answers: clean }

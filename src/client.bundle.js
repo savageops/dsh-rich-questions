@@ -180,6 +180,9 @@ window.__ModuleLoader__.load({
 			"option.recommended": "推荐",
 			"sources.title": "来源",
 			"insight.expand": "查看详情",
+			"justify.hint": "说明理由——为什么选这个选项（agent 能看到）",
+			"justify.placeholder": "为什么选这个？",
+			"justify.line": "理由：",
 			"insight.collapse": "收起详情",
 			"diagram.view": "查看流程图",
 			"diagram.hide": "收起流程图",
@@ -219,6 +222,9 @@ window.__ModuleLoader__.load({
 			"option.recommended": "Recommended",
 			"sources.title": "Sources",
 			"insight.expand": "View details",
+			"justify.hint": "Justify — why you're choosing this option (the agent sees it)",
+			"justify.placeholder": "Why this option?",
+			"justify.line": "why: ",
 			"insight.collapse": "Hide details",
 			"diagram.view": "View diagram",
 			"diagram.hide": "Hide diagram",
@@ -330,6 +336,12 @@ window.__ModuleLoader__.load({
 a.rq-source:hover{text-decoration:underline}
 .rq-tooltipInsight{display:block;max-width:280px;font-size:12px;line-height:17px}
 .rq-rowTools{flex:none;align-items:center;gap:2px;display:flex}
+.rq-justifyRow{margin-top:4px;border:1px solid var(--dsw-alias-border-l2-darkmode-thin);border-radius:8px;align-items:center;gap:6px;padding:4px 6px 4px 8px;display:flex;background:var(--dsw-alias-bg-base)}
+.rq-justifyRowActive{border-color:var(--dsw-alias-state-business-primary)}
+.rq-justifyInput{flex:1;min-width:0;border:none;outline:none;background:transparent;font:inherit;font-size:13px;line-height:18px;color:var(--dsw-alias-label-primary)}
+.rq-justifyInput::placeholder{color:var(--dsw-alias-label-caption)}
+.rq-justifyLine{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px;margin-top:2px;overflow-wrap:anywhere;cursor:pointer;text-align:left;background:0 0;border:none;padding:0}
+.rq-justifyLine:hover{text-decoration:underline}
 .rq-diagram{margin-top:8px;border:1px solid var(--dsw-alias-border-l2-darkmode-thin);background:var(--dsw-alias-markdown-code-block);border-radius:10px;max-height:240px;overflow:hidden;justify-content:center;align-items:center;padding:8px;display:flex}
 .rq-diagram svg{width:100%;height:auto;max-height:224px;display:block}
 .rq-diagramLoading,.rq-diagramError{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px}
@@ -471,7 +483,7 @@ a.rq-source:hover{text-decoration:underline}
 		 * The two buttons share one expand panel — `expandedMode` says which
 		 * content it currently shows (or null if closed).
 		 */
-		function OptionRow({ option, multi, selected, disabled, expandedMode, onChoose, onToggleExpand, t }) {
+		function OptionRow({ option, multi, selected, disabled, expandedMode, onChoose, onToggleExpand, onJustifySave, justifyText, t }) {
 			const insightText = typeof option.insight === "string" ? option.insight.trim() : "";
 			const sources = Array.isArray(option.sources) ? option.sources : [];
 			const hasInsight = insightText !== "" || sources.length > 0;
@@ -485,6 +497,67 @@ a.rq-source:hover{text-decoration:underline}
 				event.stopPropagation();
 				onToggleExpand(mode);
 			};
+			// Justify: an answer affordance on the SELECTED option only — click the
+			// pencil to open an inline input, checkmark (or Enter) submits; the saved
+			// text rides the answer so the agent sees WHY this option was chosen.
+			const [justifyEditing, setJustifyEditing] = (0, react.useState)(false);
+			const [justifyDraftText, setJustifyDraftText] = (0, react.useState)(justifyText ?? "");
+			const submitJustify = () => {
+				const trimmed = justifyDraftText.trim();
+				if (trimmed !== "") onJustifySave(option.key, trimmed.slice(0, 500));
+				setJustifyEditing(false);
+			};
+			const justifyButton = selected ? (0, react_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: cx("rq-infoBtn", justifyEditing && "rq-infoBtnOn"),
+				"aria-label": t("justify.hint"),
+				title: t("justify.hint"),
+				disabled,
+				onClick: (event) => {
+					event.stopPropagation();
+					setJustifyDraftText(justifyText ?? "");
+					setJustifyEditing((value) => !value);
+				},
+				onKeyDown: (event) => event.stopPropagation(),
+				children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconEditOutline16, { size: 12 })
+			}) : null;
+			const justifyBlock = selected && justifyEditing ? (0, react_jsx_runtime.jsxs)("span", {
+				className: cx("rq-justifyRow", justifyDraftText.trim() !== "" && "rq-justifyRowActive"),
+				children: [
+					(0, react_jsx_runtime.jsx)("input", {
+						type: "text",
+						className: "rq-justifyInput",
+						placeholder: t("justify.placeholder"),
+						value: justifyDraftText,
+						maxLength: 500,
+						autoFocus: true,
+						onChange: (event) => setJustifyDraftText(event.target.value),
+						onKeyDown: (event) => {
+							event.stopPropagation();
+							if (event.key === "Enter" && !(event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)) { event.preventDefault(); submitJustify(); }
+							if (event.key === "Escape") { event.stopPropagation(); setJustifyEditing(false); }
+						}
+					}),
+					(0, react_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "rq-iconButton",
+						"aria-label": t("action.submit"),
+						disabled: justifyDraftText.trim() === "",
+						onClick: (event) => { event.stopPropagation(); submitJustify(); },
+						children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCheckOutline14, { size: 12 })
+					})
+				]
+			}) : selected && justifyText != null && justifyText !== "" ? (0, react_jsx_runtime.jsxs)("button", {
+				type: "button",
+				className: "rq-justifyLine",
+				title: t("justify.hint"),
+				onClick: (event) => {
+					event.stopPropagation();
+					setJustifyDraftText(justifyText ?? "");
+					setJustifyEditing(true);
+				},
+				children: [t("justify.line"), justifyText]
+			}) : null;
 			const infoButton = (0, react_jsx_runtime.jsx)("button", {
 				type: "button",
 				className: cx("rq-infoBtn", textOpen && "rq-infoBtnOn"),
@@ -545,21 +618,16 @@ a.rq-source:hover{text-decoration:underline}
 										className: "rq-rowTools",
 										children: [
 											hasInsight
-												? insightText !== ""
-													? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
-														label: () => (0, react_jsx_runtime.jsx)("span", { className: "rq-tooltipInsight", children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { text: insightText }) }),
-														side: "top",
-														delayMs: 3e3,
-														children: infoButton
-													})
-													: infoButton
+												? infoButton
 												: null,
-											diagramButton
+											diagramButton,
+											justifyButton
 										]
 									}) : null
 								]
 							}),
 							option.description !== void 0 ? (0, react_jsx_runtime.jsx)("span", { className: "rq-desc", children: option.description }) : null,
+							justifyBlock,
 							hasInsight || hasDiagram ? (0, react_jsx_runtime.jsx)("div", {
 								className: cx("rq-expand", expandedMode !== void 0 && expandedMode !== null && "rq-expandOpen"),
 								children: (0, react_jsx_runtime.jsx)("div", {
@@ -598,7 +666,8 @@ a.rq-source:hover{text-decoration:underline}
 						drafts[questionId] = {
 							selected: Array.isArray(draft.selected) ? draft.selected.filter((key) => typeof key === "string") : [],
 							custom: typeof draft.custom === "string" ? draft.custom : "",
-							skipped: draft.skipped === true
+							skipped: draft.skipped === true,
+							...(draft.justify !== null && typeof draft.justify === "object" && !Array.isArray(draft.justify) ? { justify: Object.fromEntries(Object.entries(draft.justify).filter(([key, text]) => typeof key === "string" && typeof text === "string" && text !== "")) } : {})
 						};
 					}
 				}
@@ -700,12 +769,19 @@ a.rq-source:hover{text-decoration:underline}
 				setError(null);
 			};
 			const choose = (key) => {
-				if (current?.multiSelect === true) updateDraft((value) => ({
-					...value,
-					selected: value.selected.includes(key) ? value.selected.filter((entry) => entry !== key) : [...value.selected, key],
-					skipped: false
-				}));
-				else updateDraft((value) => ({ selected: [key], custom: "", skipped: false }));
+				if (current?.multiSelect === true) updateDraft((value) => {
+					const selected = value.selected.includes(key) ? value.selected.filter((entry) => entry !== key) : [...value.selected, key];
+					// Unselecting an option drops its justification — a why for a
+					// choice you no longer make is noise.
+					const justify = { ...(value.justify ?? {}) };
+					if (selected.includes(key) === false) delete justify[key];
+					return { ...value, selected, justify, skipped: false };
+				});
+				else updateDraft((value) => ({ selected: [key], custom: "", skipped: false, justify: value.justify?.[key] !== undefined ? { [key]: value.justify[key] } : {} }));
+			};
+			// Justify: store the why for a selected option; rides the answer at submit.
+			const saveJustify = (key, text) => {
+				updateDraft((value) => ({ ...value, justify: { ...(value.justify ?? {}), [key]: text } }));
 			};
 			const onCustom = (value) => {
 				updateDraft((entry) => ({
@@ -722,10 +798,14 @@ a.rq-source:hover{text-decoration:underline}
 					const custom = value?.custom.trim() ?? "";
 					const selected = value?.selected ?? [];
 					const multi = spec.questions[questionId]?.multiSelect === true;
+					const finalSelected = custom === "" || multi ? selected : [];
+					// Justifications ride the answer for SELECTED options only.
+					const justifications = Object.fromEntries(Object.entries(value?.justify ?? {}).filter(([key]) => finalSelected.includes(key)));
 					return {
 						id: questionId,
-						selected: custom === "" || multi ? selected : [],
-						...custom === "" ? {} : { custom }
+						selected: finalSelected,
+						...custom === "" ? {} : { custom },
+						...Object.keys(justifications).length > 0 ? { justifications } : {}
 					};
 				});
 				setBusy("answer");
@@ -923,6 +1003,8 @@ a.rq-source:hover{text-decoration:underline}
 												disabled: busy !== null || isBanked,
 												expandedMode: expanded !== null && expanded.key === option.key ? expanded.mode : null,
 												onChoose: choose,
+												onJustifySave: saveJustify,
+												justifyText: draft.justify?.[option.key] ?? null,
 												onToggleExpand: (mode) => toggleExpand(option.key, mode),
 												t
 											}, `${option.key}-${String(index)}`))
