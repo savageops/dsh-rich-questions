@@ -289,7 +289,8 @@ window.__ModuleLoader__.load({
 		const css = `.rq-frame{padding:6px calc(var(--dsh-composer-side-clearance) + 16px) 10px;justify-content:center;display:flex}
 .rq-card{width:100%;max-width:var(--dsh-chat-content-width);border:1px solid var(--dsw-alias-border-l2-darkmode-thin);background:var(--dsw-specific-input-major);max-height:min(60vh,520px);box-shadow:var(--dsw-shadow-lv2);color:var(--dsw-alias-label-primary);--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2);--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2);border-radius:20px;flex-direction:column;padding:0 0 10px;display:flex;overflow:hidden}
 .rq-card,.rq-card *{box-sizing:border-box}
-.rq-card::-webkit-scrollbar,.rq-body::-webkit-scrollbar,.rq-insight::-webkit-scrollbar,.rq-source-list::-webkit-scrollbar{scrollbar-width:thin;scrollbar-color:var(--dsh-scrollbar-thumb) transparent}
+.rq-card,.rq-body,.rq-insight,.rq-source-list{scrollbar-width:none}
+.rq-card::-webkit-scrollbar,.rq-body::-webkit-scrollbar,.rq-insight::-webkit-scrollbar,.rq-source-list::-webkit-scrollbar{display:none;width:0;height:0}
 .rq-cardMinimized{max-height:none}
 .rq-cardMinimized .rq-header{padding-bottom:14px}
 .rq-header{flex-shrink:0;justify-content:space-between;align-items:flex-start;gap:16px;padding:20px 16px 0 24px;display:flex}
