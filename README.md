@@ -1,135 +1,95 @@
 # dsh-rich-questions
 
-**Rich branching surveys for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH).**
-Turn flat `ask_user_question` exchanges into full questionnaires with conditional paths, per-option intelligence, visual flows, and one-click decision templates — delivered entirely as a plugin, with zero changes to DSH source.
+**Branching surveys for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) — authored live by your agent, answered in your chat.**
 
-> 富问题/问卷系统 — 把扁平的 ask_user_question 升级为带分支路径、悬停洞察、流程图与一键决策模板的完整问卷系统。
+Your agent doesn't just *send* a questionnaire — it *composes* one from the conversation's context: a directed graph of questions where each answer decides what gets asked next, every option carries its own reasoning, and the whole thing renders in the same composer seat you're already looking at. One tool call. No forms product, no account, no copy-paste.
 
----
+> 富问题/问卷系统 — 由 agent 现场编写的分支问卷：每个答案决定下一题，每个选项自带洞察与流程图，直接在聊天输入框位置作答。
 
-## Why
+MIT · zero runtime dependencies · DSH ≥ 0.1.1-rc.1 · Node ≥ 20
 
-`ask_user_question` answers one narrow need: 1–3 simple questions, flat, no context. Real alignment work is bigger than that — expectation gathering, acceptance surveys, scoping decisions across dozens of dimensions. You need **paths** (the answer to one question decides which questions follow), you need **depth** (a one-line label is never enough to choose well), and you need **speed** (sometimes the user already knows the destination and shouldn't walk every step).
-
-`ask_survey` is that system:
-
-- **Branching paths** — every option declares what follows it. Selecting *C* routes the user down an entirely different range of questions than *A*. Multi-select fans out depth-first, skip and free-text fall through cleanly, and the whole graph is validated up front (no cycles, no dangling references, unreachable questions never asked).
-- **Per-option intelligence** — insights, tradeoffs, "(today)" markers, citations, and **Mermaid flow diagrams** live inside the option row, revealed through deliberately non-invasive UX.
-- **Quick mode** — up to six whole-survey decision templates. One click applies a complete, coherent answer map and submits. The user who already knows they want "the Vercel-grade option set" never walks a single question.
-- **Pre-flight steering** — Reroll / Push / Discuss sit next to Start: rewrite the survey in cleaner prose, push it deeper with web research, or drop the form and talk it through instead.
-- **Language-follows-user** — every survey is authored in the language the user is chatting in: English conversation → English content, 中文 → 中文， any other language → that language, one language consistently across the whole survey.
-
-## Feature tour
-
-### Branching paths (the core)
-
-A survey is a directed graph, not a list. Each option carries an optional `next`:
-
-```json
-{
-  "q1": {
-    "prompt": "Which direction fits?",
-    "options": [
-      { "key": "a", "label": "Ship the public surface", "next": "q2a" },
-      { "key": "b", "label": "Rework the core first",  "next": "q2b" },
-      { "key": "c", "label": "Pause and decide later", "next": null }
-    ],
-    "next": "q2b"
-  }
-}
+```mermaid
+flowchart LR
+    A[Agent composes survey] --> B{Quick mode?}
+    B -- pick a template --> Q[All answers applied<br>one click, submitted]
+    B -- walk it --> C[Question 1]
+    C -- option a --> D[Branch A]
+    C -- option b --> E[Branch B]
+    D --> F[Paths converge]
+    E --> F
+    F --> G[Banked along the way<br>survives any reload]
+    G --> R[Structured result<br>back to the agent]
+    Q --> R
 ```
 
-Edge semantics, exactly enforced:
+## Install
 
-| Situation | Follows |
+```sh
+dsh plugin --profile web add dsh-rich-questions
+```
+
+Restart the `dsh web` process, refresh the tab — done. The `ask_survey` tool is now visible to every agent preset. (From a fork: `dsh plugin --profile web add file:/path/to/dsh-rich-questions`.)
+
+## What you get
+
+| | |
 |---|---|
-| Single-select, option has `next` | that option's `next` (a question id, a list, or `null` = end) |
-| Single-select, option has no `next` | the question-level `next` |
-| Multi-select | every selected option's branch, depth-first, in option order |
-| Skipped / free-text-only answer | the question-level `next` |
-| Branch end (`next: null`, or nothing left) | the survey finishes |
+| **Branching paths** | Every option declares what follows it (`next`). Choose *C*, get a different range of questions than *A*. Multi-select fans out depth-first; skipped/free-text fall through cleanly; the host re-derives the path independently so claimed paths are always verifiable. |
+| **Per-option intelligence** | Insights (~6 lines: what great looks like / the tradeoff / "(today)"), sources and citations, and compact **Mermaid diagrams** — revealed through a 3-second-delayed tooltip and click-to-expand, never a hover ambush. |
+| **Quick mode** | Up to six whole-survey decision templates (`a`–`f`) next to Start — "Ship like Vercel/Railway: polish + DX first" vs "Lean internal tool: ship fast". One click applies a complete, coherent answer map and submits. A 20-question alignment exercise becomes a single decision. |
+| **Bank & continue** | Per-step commit for long surveys: answers-so-far go to the host *in the background* while you advance immediately. Banked answers **lock** (view-only forever after), survive reloads, and follow you to any browser. A `{n} banked` chip tracks them. |
+| **Durable progress** | Drafts autosave per survey — reload, switch tabs, come back tomorrow: same question, same answers, same position. Nothing to press. |
+| **Pre-flight steering** | **Reroll** (rewrite it cleaner), **Push** (research competitors, come back deeper), **Discuss** (drop the form, talk it through) — one click each, before the first question. |
+| **Language follows you** | English chat → English survey. 中文 → 中文. Any language → that language, consistently. |
+| **Host-authoritative** | The pending survey lives on the host — close the browser, kill the tab, the tool keeps waiting and the wizard rehydrates on reconnect. |
 
-The wizard re-computes the live path as answers change — going **back** and changing an early answer collapses the now-unreachable branch and re-asks only what still applies. The host independently recomputes the path from submitted answers and rejects any mismatch, so a claimed path is always re-derivable, never trusted from the client.
+## Why it exists
 
-### Rich options
+`ask_user_question` is perfect for 1–3 flat questions and nothing more. Real work — expectation gathering, acceptance criteria, scoping a build across a dozen interacting dimensions — needs **paths** (one answer changes what matters next), **depth** (a one-line label is not enough to choose well), and **speed** (sometimes you already know the destination). `ask_survey` is that system, and it leaves the simple flow untouched.
 
-Every option can carry:
+## How it compares
 
-- **Arbitrary keys** — any string (`a`, `f`, `other`, `opt-3`), as many options as a question needs (default cap 40).
-- **`description`** — one always-visible line under the label.
-- **`insight`** — markdown revealed on demand (~6 lines): what great looks like, the tradeoff, the "(today)" state, caveats.
-- **`sources`** — links or citations, clickable inside the expanded panel.
-- **`diagram`** — a compact **Mermaid** flow chart for the option: architecture, decision path, pipeline — rendered inline, sized to fit without scrolling.
-- **`recommended`** — badge + first position for the option the model endorses.
+Researched against the major survey platforms and wizard-commit patterns:
 
-**Non-invasive reveal (a deliberate UX stance).** Hovering an option row does nothing — casual mouse travel never detonates panels. Insight lives behind a dedicated `?` affordance: a **3-second-delayed tooltip** previews it for a deliberate hover, and a click **expands the row inline** with the full markdown and clickable sources. The branch icon beside it opens the same panel in diagram mode. One row, one shared disclosure, zero layout jumps, zero pop-up ambushes.
+| Capability | dsh-rich-questions | Typeform | SurveyMonkey | Google Forms | MS Forms |
+|---|---|---|---|---|---|
+| Survey composed live from conversation context | ✅ | — | — | — | — |
+| Graph branching (per-option `next`) | ✅ native | logic jumps (paid) | ✅ | sections only | basic |
+| Reload resumes progress | ✅ autosave | same browser | via resume link | same browser + login | ❌ |
+| Committed answers survive browser loss | ✅ bank, any browser | partial (paid) | ❌ | ❌ | ❌ |
+| Answers lock once committed | ✅ | ❌ | ❌ | ❌ | ❌ |
+| One-click whole-survey decision templates | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Rewrite / deep-research / discuss redirection | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Per-option insights + sources + diagrams | ✅ | descriptions | descriptions | descriptions | descriptions |
+| License | MIT | commercial | commercial | free (account) | free (account) |
 
-### Quick mode — one-click owner decisions
+*Also studied: Qualtrics, Jotform, Tally, Fillout, SurveySparrow partial-submission behavior, and Stripe/TurboTax-style per-step wizard commits — banking follows the wizard pattern, which none of the survey tools implement.*
 
-Surveys can ship up to **six whole-survey answer templates** (`a`–`f`), offered as a **Quick** button next to Start:
+## The wizard
 
-```json
-{
-  "quick": [
-    {
-      "key": "a",
-      "label": "Ship like Vercel/Railway: polish + DX first",
-      "recommended": true,
-      "insight": "Optimizes for first impressions and developer love…",
-      "answers": { "q1": { "selected": ["a"] }, "q2a": { "selected": ["b"] }, "q3": { "selected": ["a", "c"] } }
-    },
-    {
-      "key": "b",
-      "label": "Lean internal tool: ship fast, minimal surface",
-      "answers": { "q1": { "selected": ["b"] }, "q2b": { "selected": ["a"] } }
-    }
-  ]
-}
-```
+Renders in the composer seat, one question per page over the live branch path:
 
-Each template is a calibrated stance — "the highest standard, applied" — expressed as a complete answer map. Picking one applies it verbatim and submits immediately: a twelve-question alignment survey becomes a single click. Templates are validated at authoring time: every referenced question and option key must exist, and a template's answers must cover every question its own choices reach.
-
-### Pre-flight steering: Reroll / Push / Discuss
-
-Before the first question, the user can redirect the entire exercise:
-
-- **Reroll** — same topic and branching intent, rewritten in cleaner, better-spoken prose in the user's own language. No jargon, no complexity.
-- **Push** — the survey comes back *deeper*: the agent runs web research on competitors and comparable systems, then expands the survey with research-grounded insights and more precise branching.
-- **Discuss** — skip the form; the topic moves to plain conversation until a direction converges.
-
-All three return a structured outcome with an explicit `instruction` to the model — never an error, never a dead end.
-
-### The wizard
-
-Renders in the **same composer seat** as the built-in question card, so a pending survey is always where the user is already looking:
-
-- One question per page over the live branch path
-- Progress bar + answered/total counter against the *current* path
-- Back (re-evaluates branches from saved answers), Skip (per-question `skippable`), minimize, cancel
-- **Durable progress**: drafts autosave locally per survey — a reload or tab switch resumes exactly where you were (question, answers, quick mode). Nothing to press; it just survives.
-- **Bank & continue** (long surveys): next to Next, a per-step commit — answers-so-far go to the host *in the background* while the walk advances immediately. Banked answers lock (view-only when you go back — you can read them, never re-answer), survive reloads, and rehydrate on **any** browser from the host, not just the one that banked them. A `{n} banked` chip in the pager tracks them. On the last question the button steps aside — Submit already carries everything.
-- Multi-select with check boxes, free-text `other` row (`allowCustom`, on by default)
-- UI chrome localizes automatically (English / 简体中文, graceful fallback for any other locale); survey *content* follows the conversation's language by instruction — the authoring model is told, in both English and Chinese, to match the user's language end to end. Keyboard-operable rows, aria-labelled controls.
-- **Host-authoritative**: the pending survey lives on the host. Close the tab, refresh, come back from another browser — the survey rehydrates (SSE + reconciliation) and the tool keeps waiting the whole time. Routes are loopback-fenced like the rest of the DSH web surface.
+- Progress bar + answered/total against the *current* path; back re-evaluates branches from saved answers
+- Multi-select with checkboxes, free-text `other` row, per-question `skippable`
+- Every button explained by a delayed tooltip — Start/Next/Submit (contextual), Skip, Bank, Quick, Reroll, Push, Discuss, back, minimize, cancel
+- Keyboard-operable rows, aria-labelled controls; UI chrome localizes (EN / 简体中文, graceful fallback elsewhere)
+- Host-authoritative pending state, loopback-fenced routes, SSE + poll rehydration
 
 ## Authoring guide
 
-Full spec with every capability in one place:
+One spec, every capability:
 
 ```json
 {
   "survey": {
     "title": "Expectation alignment",
-    "intro": "Short markdown preamble — the first page the user sees.",
+    "intro": "Short markdown preamble — the first page.",
     "entry": "q1",
     "questions": {
       "q1": {
         "prompt": "Which direction fits this release?",
         "header": "Scope",
-        "detail": "Optional markdown context under the question.",
-        "multiSelect": false,
-        "allowCustom": true,
-        "skippable": true,
+        "detail": "Optional markdown context.",
         "options": [
           {
             "key": "a",
@@ -160,9 +120,21 @@ Full spec with every capability in one place:
 }
 ```
 
-**Validation (submit-time, host-side).** `entry` exists; every `next` names a real question (question-level `next: null` = no follow-up, same as omitting); option keys unique per question; the graph is cycle-free; quick templates reference only real questions/options, and their answers cover only what their own selections reach; size caps hold (150 questions, 40 options/question, 1500-char insights, 1200-char diagrams, 8 sources, 6 quick templates). Unreachable questions are never asked and never answered. Rejected specs get a self-repairing message: the exact offending spot, the nearest defined id for dangling references, and the full id roster — one retry fixes it.
+**Edge semantics** — exactly enforced:
 
-**Result — completed survey:**
+| Situation | Follows |
+|---|---|
+| Single-select, option has `next` | that option's `next` (id, list, or `null` = end) |
+| Single-select, option has no `next` | the question-level `next` |
+| Multi-select | every selected option's branch, depth-first, in option order |
+| Skipped / free-text-only | the question-level `next` |
+| Nothing left / `next: null` | the survey finishes |
+
+**Validation is self-repairing.** Every rule is checked host-side at authoring time: `entry` exists, every `next` names a real question (question-level `null` = no follow-up), no cycles, option keys unique, quick templates reference only reachable questions with real option keys, size caps hold (150 questions / 40 options / 1500-char insights / 1200-char diagrams / 8 sources / 6 templates). Rejected specs get the exact offending spot, the **nearest defined id** for dangling references, and the **full id roster** — one retry fixes it.
+
+## Result shapes
+
+Completed (manual walk, quick template, or a mix — indistinguishable):
 
 ```json
 {
@@ -176,54 +148,33 @@ Full spec with every capability in one place:
 }
 ```
 
-Quick-mode submissions are indistinguishable from manual ones — the template's answers simply *are* the answers.
-
-**Result — pre-flight redirect:**
+Pre-flight redirect:
 
 ```json
 {
   "outcome": "push",
-  "instruction": "The user hit \"Push\" before starting: … run aggressive research … Call ask_survey again with the expanded, better-informed spec; do not ask the user anything first."
+  "instruction": "The user hit \"Push\" before starting: … run aggressive web research … Call ask_survey again with the expanded, better-informed spec; do not ask the user anything first."
 }
 ```
 
-## Install
-
-```sh
-dsh plugin --profile web add dsh-rich-questions
-```
-
-Or from a checkout / fork:
-
-```sh
-dsh plugin --profile web add file:/path/to/dsh-rich-questions
-```
-
-Restart the `dsh web` process after install (the host half loads at boot). Toggle on/off from the Plugins settings tab without uninstalling, or disable in the profile's `cordis.patch.yml`:
-
-```yaml
-- id: rich-questions
-  disabled: true
-```
-
-**Requirements:** DSH ≥ 0.1.1-rc.1, Node ≥ 20. Works alongside the built-in `ask_user_question` — simple 1–3 question asks and plan review are untouched.
+Banking never changes the result shape — banked answers simply *are* answers, committed earlier and locked along the way.
 
 ## Architecture
 
 ```
-src/host.js            Node half — ask_survey tool, pending-survey registry,
-                       /api/rich-questions/{state,action,events} routes,
-                       system-prompt announcement. Node builtins only.
-src/survey-engine.js   Pure engine — branch-path computation + spec/answer
-                       validation. Imported by the host AND inlined verbatim
-                       into the client bundle (keep the two in sync).
-src/client.bundle.js   Browser half — the composer-seat wizard
-                       (window.__ModuleLoader__ bundle; react + client
-                       primitives only).
+src/host.js            Node half — ask_survey tool, pending-survey registry with
+                       write-ahead banking, /api/rich-questions/{state,action,events}
+                       routes, bilingual system-prompt announcement. Node builtins only.
+src/survey-engine.js   Pure engine — branch-path computation + self-repairing
+                       spec/answer validation. Imported by the host AND inlined
+                       verbatim into the client bundle (keep the two in sync).
+src/client.bundle.js   Browser half — the composer-seat wizard (draft autosave,
+                       banking, quick mode, diagrams, tooltips). React + client
+                       primitives only.
 cordis.patch.yml       Bundle patch inserting the plugin row.
 ```
 
-The Mermaid engine lazy-loads from CDN on first diagram expand and is cached thereafter — everything else is fully offline.
+The Mermaid engine lazy-loads from CDN on first diagram expand and caches after — everything else is fully offline.
 
 ## License
 
