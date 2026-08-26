@@ -40,7 +40,7 @@ Restart the `dsh web` process, refresh the tab — done. The `ask_survey` tool i
 | **Quick mode** | Up to six whole-survey decision templates (`a`–`f`) next to Start — "Ship like Vercel/Railway: polish + DX first" vs "Lean internal tool: ship fast". One click applies a complete, coherent answer map and submits. A 20-question alignment exercise becomes a single decision. |
 | **Bank & continue** | Per-step commit for long surveys: answers-so-far go to the host *in the background* while you advance immediately. Banked answers **lock** (view-only forever after), survive reloads, and follow you to any browser. A `{n} banked` chip tracks them. |
 | **Durable progress** | Drafts autosave per survey — reload, switch tabs, come back tomorrow: same question, same answers, same position. Nothing to press. |
-| **Pre-flight steering** | **Reroll** (rewrite it cleaner), **Push** (research competitors, come back deeper), **Discuss** (drop the form, talk it through) — one click each, before the first question. |
+| **Pre-flight steering** | **Reroll** (rewrite it cleaner), **Push** (deep research: 12+ competitors, GitHub open-source repos, `.refs/` curated references — options grounded in specific evidence, not guessing), **Discuss** (drop the form, talk it through) — one click each, before the first question. |
 | **Language follows you** | English chat → English survey. 中文 → 中文. Any language → that language, consistently. |
 | **Host-authoritative** | The pending survey lives on the host — close the browser, kill the tab, the tool keeps waiting and the wizard rehydrates on reconnect. |
 
