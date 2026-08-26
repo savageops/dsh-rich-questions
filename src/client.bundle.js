@@ -1,0 +1,887 @@
+window.__ModuleLoader__.load({
+	id: "dsh-rich-questions",
+	factory: (require) => {
+		var module = { exports: {} };
+		var exports = module.exports;
+		Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
+		let react = require("react");
+		let react_jsx_runtime = require("react/jsx-runtime");
+		let _deepseek_ai_dsh_client_ui_primitives = require("@deepseek-ai/dsh-client-ui-primitives");
+		//#region lib/cx.js
+		/** Tiny clsx stand-in (no runtime dependency for the local bundle). */
+		function cx() {
+			let out = "";
+			for (const entry of arguments) {
+				if (!entry) continue;
+				if (typeof entry === "string" || typeof entry === "number") out += (out ? " " : "") + entry;
+				else if (Array.isArray(entry)) { const nested = cx(...entry); if (nested) out += (out ? " " : "") + nested; }
+				else for (const [key, value] of Object.entries(entry)) if (value) out += (out ? " " : "") + key;
+			}
+			return out;
+		}
+		//#endregion
+		//#region lib/survey-engine.js (INLINE COPY — keep in sync with src/survey-engine.js)
+		/**
+		* The same pure engine the host validates with, inlined verbatim into the
+		* browser bundle (ESM exports stripped). The client navigates the branch
+		* path this computes; the host re-derives it to validate answers.
+		*/
+		function normalizeNext(value) {
+			if (value === null || value === undefined) return [];
+			if (typeof value === "string") return value === "" ? [] : [value];
+			if (Array.isArray(value)) return value.filter((entry) => typeof entry === "string" && entry !== "");
+			return [];
+		}
+		function computePath(spec, answers = new Map()) {
+			const nodes = spec.questions;
+			const path = [];
+			const seen = new Set();
+			const expand = (id) => {
+				if (typeof id !== "string" || nodes[id] === undefined || seen.has(id)) return;
+				seen.add(id);
+				path.push(id);
+				const node = nodes[id];
+				const answer = answers.get(id);
+				const nexts = [];
+				const push = (list) => {
+					for (const entry of list) nexts.push(entry);
+				};
+				if (answer !== undefined && answer.skipped !== true && answer.selected.length > 0) {
+					for (const option of node.options ?? []) {
+						if (!answer.selected.includes(option.key)) continue;
+						if (Object.hasOwn(option, "next")) {
+							if (option.next !== null) push(normalizeNext(option.next));
+						} else {
+							push(normalizeNext(node.next));
+						}
+					}
+				} else {
+					push(normalizeNext(node.next));
+				}
+				for (const next of nexts) expand(next);
+			};
+			expand(spec.entry);
+			return path;
+		}
+		//#endregion
+		//#region lib/transport.js
+		const API = "/api/rich-questions";
+		/**
+		* Module-level survey store: sessionId -> { surveyId, spec, createdAt }.
+		* Hydrated by the plugin SSE stream (hello + requested/resolved frames)
+		* with a reconciliation poll as fallback; the host pending table is the
+		* authority, so a closed/refreshed browser re-hydrates the in-flight
+		* survey on reconnect.
+		*/
+		function createSurveyStore() {
+			const bySession = new Map();
+			const listeners = new Set();
+			let started = false;
+			function notify() {
+				for (const listener of [...listeners]) listener();
+			}
+			function applyState(surveys) {
+				let changed = false;
+				const live = new Map(surveys.map((survey) => [survey.sessionId, survey]));
+				for (const [sessionId] of [...bySession]) if (!live.has(sessionId)) {
+					bySession.delete(sessionId);
+					changed = true;
+				}
+				for (const survey of surveys) {
+					const current = bySession.get(survey.sessionId);
+					if (current?.surveyId !== survey.surveyId) {
+						bySession.set(survey.sessionId, { surveyId: survey.surveyId, sessionId: survey.sessionId, spec: survey.spec, createdAt: survey.createdAt });
+						changed = true;
+					}
+				}
+				if (changed) notify();
+			}
+			function applyFrame(frame) {
+				if (frame.type === "survey/requested") {
+					if (bySession.get(frame.sessionId)?.surveyId !== frame.surveyId) {
+						bySession.set(frame.sessionId, { surveyId: frame.surveyId, sessionId: frame.sessionId, spec: frame.spec, createdAt: frame.createdAt ?? Date.now() });
+						notify();
+					}
+				} else if (frame.type === "survey/resolved") {
+					if (bySession.get(frame.sessionId)?.surveyId === frame.surveyId) {
+						bySession.delete(frame.sessionId);
+						notify();
+					}
+				} else if (frame.type === "hello") {
+					applyState(frame.surveys ?? []);
+				}
+			}
+			function poll() {
+				fetch(`${API}/state`, { cache: "no-store" }).then((res) => (res.ok ? res.json() : null)).then((data) => {
+					if (data && Array.isArray(data.surveys)) applyState(data.surveys);
+				}).catch(() => {});
+			}
+			function start() {
+				if (started || typeof window === "undefined" || typeof EventSource === "undefined") return;
+				started = true;
+				try {
+					const stream = new EventSource(`${API}/events`);
+					stream.onmessage = (event) => {
+						try { applyFrame(JSON.parse(event.data)); } catch { /* one bad frame must not kill the stream */ }
+					};
+					stream.onerror = () => { /* EventSource reconnects; the hello frame re-hydrates */ };
+				} catch { /* fall back to the poll below */ }
+				window.setInterval(poll, 20_000);
+				document.addEventListener("visibilitychange", () => {
+					if (document.visibilityState === "visible") poll();
+				});
+			}
+			return {
+				get(sessionId) { return bySession.get(sessionId); },
+				/**
+				 * Hydration MUST start at plugin activation, not on first
+				 * subscribe: the composer chain only mounts the wizard when
+				 * select() already sees a pending survey for the viewed
+				 * session, and nothing subscribes before that mount — a
+				 * lazy start() here would deadlock (store never fetches,
+				 * wizard never mounts, tool call hangs forever).
+				 */
+				start,
+				/** Forget locally after a successful action (the resolved frame confirms). */
+				forget(sessionId) { if (bySession.delete(sessionId)) notify(); },
+				subscribe(listener) {
+					start();
+					listeners.add(listener);
+					return () => listeners.delete(listener);
+				},
+				async respond(surveyId, action) {
+					const res = await fetch(`${API}/action`, {
+						method: "POST",
+						headers: { "content-type": "application/json" },
+						body: JSON.stringify({ ...action, surveyId }),
+					});
+					const body = await res.json().catch(() => ({ ok: false, error: "bad-host-response" }));
+					if (!res.ok || body.ok !== true) throw new Error(body.error ?? `action failed: HTTP ${res.status}`);
+					return body;
+				}
+			};
+		}
+		const surveyStore = createSurveyStore();
+		//#endregion
+		//#region lib/locales.js
+		const NS = "rich-question";
+		const zh = {
+			"title.default": "问卷",
+			"option.recommended": "推荐",
+			"sources.title": "来源",
+			"insight.expand": "查看详情",
+			"insight.collapse": "收起详情",
+			"diagram.view": "查看流程图",
+			"diagram.hide": "收起流程图",
+			"diagram.loading": "图表加载中…",
+			"diagram.error": "图表渲染失败",
+			"custom.placeholder": "输入你的答案",
+			"action.start": "开始",
+			"action.reroll": "重掷",
+			"action.reroll.hint": "同一主题重新生成一版问卷：更简洁、更地道、更清晰的英文表达，去掉复杂措辞。",
+			"action.push": "深挖",
+			"action.push.hint": "先用 nsect 做一轮主动网络调研，挖掘竞品方法论、架构与情报，再据此把问卷加深加广后重新生成。",
+			"action.discuss": "讨论",
+			"action.discuss.hint": "先不急着填表——在对话里和 AI 讨论这个主题，想清楚方向后再重新生成问卷。",
+			"action.quick": "快速",
+			"action.quick.hint": "把当前问卷压缩成最多 6 个「决策模板」——选 1 个即可自动套用全部答案并直接提交，无需逐题作答。",
+			"quick.chip": "快速模式",
+			"quick.title": "快速模式",
+			"quick.subtitle": "选择最贴近你目标的一项，自动套用全部答案并直接提交。",
+			"action.skip": "跳过",
+			"action.next": "下一题",
+			"action.submit": "提交问卷",
+			"error.unanswered": "请先选择一个选项或填写答案。",
+			"nav.prev": "上一题",
+			"nav.cancel": "放弃问卷",
+			"nav.minimize": "收起问卷卡片",
+			"nav.maximize": "展开问卷卡片"
+		};
+		const en = {
+			"title.default": "Survey",
+			"option.recommended": "Recommended",
+			"sources.title": "Sources",
+			"insight.expand": "View details",
+			"insight.collapse": "Hide details",
+			"diagram.view": "View diagram",
+			"diagram.hide": "Hide diagram",
+			"diagram.loading": "Loading diagram…",
+			"diagram.error": "Diagram failed to render",
+			"custom.placeholder": "Type your answer",
+			"action.start": "Start",
+			"action.reroll": "Reroll",
+			"action.reroll.hint": "Regenerate this survey on the same topic: cleaner, more well-spoken, competent English — no jargon, no complexity.",
+			"action.push": "Push",
+			"action.push.hint": "Run aggressive web research first (via nsect) to gather competitor methods, architecture, and intelligence, then regenerate the survey deeper and broader.",
+			"action.discuss": "Discuss",
+			"action.discuss.hint": "Don't fill the form yet — discuss the topic with the agent in chat first, then regenerate once the direction is clear.",
+			"action.quick": "Quick",
+			"action.quick.hint": "Condense this survey into up to 6 decision templates — pick one to auto-fill every answer and submit immediately, no question-by-question walk.",
+			"quick.chip": "Quick mode",
+			"quick.title": "Quick mode",
+			"quick.subtitle": "Pick whichever is closest to what you want — it auto-fills every answer and submits right away.",
+			"action.skip": "Skip",
+			"action.next": "Next",
+			"action.submit": "Submit survey",
+			"error.unanswered": "Please select an option or type an answer first.",
+			"nav.prev": "Previous question",
+			"nav.cancel": "Dismiss the survey",
+			"nav.minimize": "Collapse the survey card",
+			"nav.maximize": "Expand the survey card"
+		};
+		//#endregion
+		//#region lib/styles.css
+		const css = `.rq-frame{padding:6px calc(var(--dsh-composer-side-clearance) + 16px) 10px;justify-content:center;display:flex}
+.rq-card{width:100%;max-width:var(--dsh-chat-content-width);border:1px solid var(--dsw-alias-border-l2-darkmode-thin);background:var(--dsw-specific-input-major);max-height:min(60vh,520px);box-shadow:var(--dsw-shadow-lv2);color:var(--dsw-alias-label-primary);--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2);--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2);border-radius:20px;flex-direction:column;padding:0 0 10px;display:flex;overflow:hidden}
+.rq-card,.rq-card *{box-sizing:border-box}
+.rq-card::-webkit-scrollbar,.rq-body::-webkit-scrollbar,.rq-insight::-webkit-scrollbar,.rq-source-list::-webkit-scrollbar{scrollbar-width:thin;scrollbar-color:var(--dsh-scrollbar-thumb) transparent}
+.rq-cardMinimized{max-height:none}
+.rq-cardMinimized .rq-header{padding-bottom:14px}
+.rq-header{flex-shrink:0;justify-content:space-between;align-items:flex-start;gap:16px;padding:20px 16px 0 24px;display:flex}
+.rq-headingBlock{min-width:0}
+.rq-eyebrow{color:var(--dsw-alias-label-tertiary);margin-bottom:5px;font-size:11px;line-height:16px;display:flex;align-items:center;gap:6px;min-height:16px}
+.rq-chip{background:var(--dsw-alias-markdown-code-block);color:var(--dsw-alias-label-secondary);border-radius:6px;padding:0 6px;font-size:11px;line-height:16px}
+.rq-title{margin:0;font-size:16px;font-weight:500;line-height:22px;overflow-wrap:anywhere}
+.rq-headerActions{flex-shrink:0;align-items:center;gap:4px;display:flex}
+.rq-iconButton{width:24px;height:24px;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:999px;place-items:center;padding:0;display:grid}
+.rq-iconButton:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.rq-iconButton:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}
+.rq-body{overscroll-behavior:contain;flex-direction:column;flex:auto;min-height:0;gap:10px;padding:12px 16px 4px;display:flex;overflow-y:auto}
+.rq-detail{margin:0 2px 2px}
+.rq-options{flex-direction:column;gap:6px;display:flex}
+.rq-opt{width:100%;text-align:left;cursor:pointer;background:0 0;border:1px solid transparent;border-radius:12px;padding:8px 10px;display:flex;gap:10px;align-items:flex-start;font:inherit;color:inherit;transition:border-color 120ms ease,background-color 120ms ease;user-select:none}
+.rq-opt:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.rq-opt:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px}
+.rq-opt[aria-disabled="true"]{cursor:default;opacity:.7;pointer-events:none}
+.rq-optSelected{border-color:var(--dsw-alias-state-warn-secondary);background:color-mix(in srgb, var(--dsw-alias-state-warn-tertiary) 35%, transparent)}
+.rq-key{min-width:22px;height:22px;flex:none;border:1px solid var(--dsw-alias-border-l2-darkmode-thin);border-radius:7px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:20px;justify-content:center;align-items:center;margin-top:1px;display:inline-flex;overflow:hidden;padding:0 3px}
+.rq-optSelected .rq-key{border-color:var(--dsw-alias-state-warn-secondary);background:var(--dsw-alias-state-warn-tertiary);color:var(--dsw-alias-state-warn-primary)}
+.rq-box{width:18px;height:18px;flex:none;border:1px solid var(--dsw-alias-border-l2-darkmode-thin);border-radius:5px;margin-top:2px;justify-content:center;align-items:center;display:inline-flex}
+.rq-boxOn{border-color:var(--dsw-alias-state-warn-secondary);background:var(--dsw-alias-state-warn-tertiary);color:var(--dsw-alias-state-warn-primary)}
+.rq-copy{flex:1;min-width:0;display:flex;flex-direction:column}
+.rq-headRow{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.rq-line{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;min-width:0}
+.rq-label{font-size:14px;line-height:20px;font-weight:500;overflow-wrap:anywhere}
+.rq-badge{background:var(--dsw-alias-state-warn-tertiary);color:var(--dsw-alias-state-warn-primary);border-radius:999px;font-size:11px;line-height:16px;padding:0 7px;flex:none}
+.rq-desc{color:var(--dsw-alias-label-secondary);font-size:13px;line-height:18px;overflow-wrap:anywhere;margin-top:2px}
+.rq-infoBtn{width:20px;height:20px;flex:none;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:999px;place-items:center;padding:0;display:grid;transition:background-color 120ms ease,color 120ms ease}
+.rq-infoBtn:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.rq-infoBtn:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px}
+.rq-infoBtnOn{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-state-business-primary)}
+.rq-expand{display:grid;grid-template-rows:0fr;transition:grid-template-rows 200ms ease}
+.rq-expandOpen{grid-template-rows:1fr}
+.rq-expandInner{overflow:hidden}
+.rq-insight{margin-top:8px;border:1px solid var(--dsw-alias-border-l2-darkmode-thin);background:var(--dsw-alias-markdown-code-block);border-radius:10px;font-size:12px;line-height:18px;max-height:220px;overflow-y:auto;padding:8px 10px;opacity:0;transition:opacity 160ms ease}
+.rq-expandOpen .rq-insight{opacity:1;transition-delay:60ms}
+.rq-insight-md{font-size:12px}
+.rq-sources{margin-top:6px;display:flex;flex-direction:column;gap:2px}
+.rq-sources-title{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:14px;text-transform:uppercase;letter-spacing:.04em}
+.rq-source-list{display:flex;flex-direction:column;gap:1px}
+.rq-source{color:var(--dsw-alias-state-business-primary);font-size:12px;line-height:16px;overflow-wrap:anywhere;text-decoration:none}
+a.rq-source:hover{text-decoration:underline}
+.rq-tooltipInsight{display:block;max-width:280px;font-size:12px;line-height:17px}
+.rq-rowTools{flex:none;align-items:center;gap:2px;display:flex}
+.rq-diagram{margin-top:8px;border:1px solid var(--dsw-alias-border-l2-darkmode-thin);background:var(--dsw-alias-markdown-code-block);border-radius:10px;max-height:240px;overflow:hidden;justify-content:center;align-items:center;padding:8px;display:flex}
+.rq-diagram svg{width:100%;height:auto;max-height:224px;display:block}
+.rq-diagramLoading,.rq-diagramError{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px}
+.rq-diagramError{color:var(--dsw-alias-state-error-primary)}
+.rq-customRow{cursor:text;border:1px solid var(--dsw-alias-border-l2-darkmode-thin);border-radius:12px;align-items:center;gap:10px;padding:8px 10px;display:flex}
+.rq-customRowActive{border-color:var(--dsw-alias-state-business-primary)}
+.rq-customIcon{color:var(--dsw-alias-label-tertiary);flex:none;margin-top:2px;display:inline-flex}
+.rq-footer{flex-shrink:0;justify-content:space-between;align-items:center;gap:12px;padding:8px 16px 2px;display:flex}
+.rq-pager{flex-shrink:0;align-items:center;gap:8px;display:flex}
+.rq-progress{color:var(--dsw-alias-label-secondary);white-space:nowrap;font-size:13px;line-height:20px}
+.rq-bar{width:96px;height:3px;background:var(--dsw-alias-border-l2-darkmode-thin);border-radius:999px;overflow:hidden}
+.rq-barFill{height:100%;background:var(--dsw-alias-state-business-primary);border-radius:999px;transition:width 160ms ease}
+.rq-feedback{flex:1;min-width:0;color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:16px;overflow-wrap:anywhere}
+.rq-footerActions{flex-shrink:0;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:8px;display:flex}
+@media (width<=720px){.rq-card{border-radius:16px}.rq-header{padding:14px 12px 0 16px}.rq-body{padding:10px 12px 2px}.rq-footer{flex-wrap:wrap;padding:8px 12px 2px}}`;
+		const tagId = "dsh-rich-questions/survey-wizard.css";
+		if (typeof document !== "undefined" && document.querySelector('style[data-plugin-css="' + tagId + '"]') === null) {
+			const tag = document.createElement("style");
+			tag.dataset.plugin = "dsh-rich-questions";
+			tag.dataset.pluginCss = tagId;
+			tag.textContent = css;
+			document.head.appendChild(tag);
+		}
+		//#endregion
+		//#region lib/components.js
+		/** Free-text answer row (shared shape with the built-in composer). */
+		function CustomRow({ value, placeholder, disabled, active, onChange, onEnter, t }) {
+			return (0, react_jsx_runtime.jsxs)("div", {
+				className: cx("rq-customRow", active && "rq-customRowActive"),
+				children: [
+					(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconEditOutline16, { size: 13, className: "rq-customIcon" }),
+					(0, react_jsx_runtime.jsx)("input", {
+						type: "text",
+						className: "rq-customInput",
+						style: { flex: 1, minWidth: 0, border: "none", outline: "none", background: "transparent", font: "inherit", fontSize: 14, lineHeight: "20px", color: "var(--dsw-alias-label-primary)" },
+						placeholder,
+						value,
+						disabled,
+						onChange: (event) => onChange(event.target.value),
+						onKeyDown: (event) => {
+							if (event.key === "Enter" && !event.shiftKey && !(event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)) {
+								event.preventDefault();
+								onEnter();
+							}
+						}
+					})
+				]
+			});
+		}
+		/** Full insight body (markdown + sources), shared by the tooltip preview and the expand panel. */
+		function InsightBody({ insightText, sources, t, withSources }) {
+			return (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, {
+				children: [
+					insightText !== "" ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { text: insightText, className: "rq-insight-md" }) : null,
+					withSources && sources.length > 0 ? (0, react_jsx_runtime.jsxs)("span", {
+						className: "rq-sources",
+						children: [
+							(0, react_jsx_runtime.jsx)("span", { className: "rq-sources-title", children: t("sources.title") }),
+							(0, react_jsx_runtime.jsx)("span", {
+								className: "rq-source-list",
+								children: sources.map((source, index) => (0, react_jsx_runtime.jsx)(source.trim().startsWith("http") ? "a" : "span", {
+									key: index,
+									className: "rq-source",
+									...source.trim().startsWith("http") ? { href: source, target: "_blank", rel: "noreferrer" } : {},
+									children: source
+								}))
+							})
+						]
+					}) : null
+				]
+			});
+		}
+		/** Intro-page pre-flight button (reroll/push/discuss): outline button, explained by a short delayed tooltip so the row of four buttons stays legible without a wall of caption text. */
+		function PreflightButton({ hint, disabled, onClick, children }) {
+			return (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
+				label: hint,
+				side: "top",
+				delayMs: 500,
+				children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+					variant: "outline",
+					disabled,
+					onClick,
+					children
+				})
+			});
+		}
+		//#region lib/mermaid.js
+		/**
+		 * Lazy, module-singleton Mermaid loader. Nothing downloads until the
+		 * first diagram is actually expanded; every diagram afterwards reuses
+		 * the same initialized instance. No local dependency — Mermaid ships
+		 * nowhere in the host app, so this pulls the ESM build from a CDN on
+		 * first use only (a one-time browser-cached fetch, not a bundle cost).
+		 */
+		const MERMAID_CDN_URL = "https://cdn.jsdelivr.net/npm/mermaid@11/+esm";
+		let mermaidLoad;
+		function loadMermaid() {
+			if (mermaidLoad === undefined) mermaidLoad = import(/* @vite-ignore */ MERMAID_CDN_URL).then((module) => {
+				const mermaid = module.default;
+				const dark = typeof document !== "undefined" && (document.documentElement.classList.contains("dark") || document.documentElement.dataset.theme === "dark");
+				mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: dark ? "dark" : "neutral", fontFamily: "inherit" });
+				return mermaid;
+			});
+			return mermaidLoad;
+		}
+		let mermaidDiagramSeq = 0;
+		/** Renders one compact Mermaid diagram; loads the engine on mount, keeps state per `code`. */
+		function MermaidDiagram({ code, t }) {
+			const [state, setState] = (0, react.useState)({ status: "loading" });
+			(0, react.useEffect)(() => {
+				let cancelled = false;
+				setState({ status: "loading" });
+				loadMermaid().then((mermaid) => mermaid.render(`rq-mmd-${String(mermaidDiagramSeq += 1)}`, code)).then(({ svg }) => {
+					if (!cancelled) setState({ status: "ready", svg });
+				}).catch((cause) => {
+					if (!cancelled) setState({ status: "error", message: cause instanceof Error ? cause.message : String(cause) });
+				});
+				return () => { cancelled = true; };
+			}, [code]);
+			if (state.status === "loading") return (0, react_jsx_runtime.jsx)("span", { className: "rq-diagramLoading", children: t("diagram.loading") });
+			if (state.status === "error") return (0, react_jsx_runtime.jsx)("span", { className: "rq-diagramError", children: t("diagram.error") });
+			return (0, react_jsx_runtime.jsx)("div", { dangerouslySetInnerHTML: { __html: state.svg } });
+		}
+		//#endregion
+		/**
+		 * One option row: key badge, label, one-line description.
+		 *
+		 * Insight affordance is a dedicated trailing "?" button, not a
+		 * whole-row hover trap: hovering it (any duration) previews the
+		 * insight text in a delayed tooltip (does not fire on incidental
+		 * mouse travel across the list), and clicking it pins the full
+		 * insight — including clickable sources — open inline (disclosure,
+		 * not a hover trap) until toggled again or the question changes.
+		 *
+		 * A second, independent affordance (the branch icon) opens the same
+		 * panel in diagram mode instead: a compact Mermaid flow, no text.
+		 * The two buttons share one expand panel — `expandedMode` says which
+		 * content it currently shows (or null if closed).
+		 */
+		function OptionRow({ option, multi, selected, disabled, expandedMode, onChoose, onToggleExpand, t }) {
+			const insightText = typeof option.insight === "string" ? option.insight.trim() : "";
+			const sources = Array.isArray(option.sources) ? option.sources : [];
+			const hasInsight = insightText !== "" || sources.length > 0;
+			const diagramText = typeof option.diagram === "string" ? option.diagram.trim() : "";
+			const hasDiagram = diagramText !== "";
+			const recommended = option.recommended === true || /\s*(?:\((?:recommended|推荐)\)|（(?:recommended|推荐)）)\s*$/i.test(option.label);
+			const displayLabel = recommended ? option.label.replace(/\s*(?:\((?:recommended|推荐)\)|（(?:recommended|推荐)）)\s*$/i, "") : option.label;
+			const textOpen = expandedMode === "text";
+			const diagramOpen = expandedMode === "diagram";
+			const stopAndToggle = (mode) => (event) => {
+				event.stopPropagation();
+				onToggleExpand(mode);
+			};
+			const infoButton = (0, react_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: cx("rq-infoBtn", textOpen && "rq-infoBtnOn"),
+				"aria-expanded": textOpen,
+				"aria-label": t(textOpen ? "insight.collapse" : "insight.expand"),
+				disabled,
+				onClick: stopAndToggle("text"),
+				onKeyDown: (event) => event.stopPropagation(),
+				children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconQuestionOutline14, { size: 12 })
+			});
+			const diagramButton = hasDiagram ? (0, react_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: cx("rq-infoBtn", diagramOpen && "rq-infoBtnOn"),
+				"aria-expanded": diagramOpen,
+				"aria-label": t(diagramOpen ? "diagram.hide" : "diagram.view"),
+				title: t(diagramOpen ? "diagram.hide" : "diagram.view"),
+				disabled,
+				onClick: stopAndToggle("diagram"),
+				onKeyDown: (event) => event.stopPropagation(),
+				children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconBranchOutline16, { size: 12 })
+			}) : null;
+			return (0, react_jsx_runtime.jsxs)("div", {
+				className: cx("rq-opt", selected && !multi && "rq-optSelected"),
+				role: multi ? "checkbox" : "radio",
+				"aria-checked": selected,
+				"aria-disabled": disabled || void 0,
+				tabIndex: disabled ? -1 : 0,
+				onClick: () => { if (!disabled) onChoose(option.key); },
+				onKeyDown: (event) => {
+					if (disabled) return;
+					if (event.key === " " || event.key === "Enter") {
+						event.preventDefault();
+						onChoose(option.key);
+					}
+				},
+				children: [
+					multi
+						? (0, react_jsx_runtime.jsx)("span", {
+							className: cx("rq-box", selected && "rq-boxOn"),
+							"aria-hidden": "true",
+							children: selected ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCheckOutline14, { size: 12 }) : null
+						})
+						: (0, react_jsx_runtime.jsx)("span", { className: "rq-key", children: option.key }),
+					(0, react_jsx_runtime.jsxs)("span", {
+						className: "rq-copy",
+						children: [
+							(0, react_jsx_runtime.jsxs)("span", {
+								className: "rq-headRow",
+								children: [
+									(0, react_jsx_runtime.jsxs)("span", {
+										className: "rq-line",
+										children: [
+											(0, react_jsx_runtime.jsx)("span", { className: "rq-label", children: displayLabel }),
+											recommended ? (0, react_jsx_runtime.jsx)("span", { className: "rq-badge", children: t("option.recommended") }) : null
+										]
+									}),
+									hasInsight || hasDiagram ? (0, react_jsx_runtime.jsxs)("span", {
+										className: "rq-rowTools",
+										children: [
+											hasInsight
+												? insightText !== ""
+													? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
+														label: () => (0, react_jsx_runtime.jsx)("span", { className: "rq-tooltipInsight", children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { text: insightText }) }),
+														side: "top",
+														delayMs: 3e3,
+														children: infoButton
+													})
+													: infoButton
+												: null,
+											diagramButton
+										]
+									}) : null
+								]
+							}),
+							option.description !== void 0 ? (0, react_jsx_runtime.jsx)("span", { className: "rq-desc", children: option.description }) : null,
+							hasInsight || hasDiagram ? (0, react_jsx_runtime.jsx)("div", {
+								className: cx("rq-expand", expandedMode !== void 0 && expandedMode !== null && "rq-expandOpen"),
+								children: (0, react_jsx_runtime.jsx)("div", {
+									className: "rq-expandInner",
+									children: diagramOpen && hasDiagram
+										? (0, react_jsx_runtime.jsx)("div", { className: "rq-diagram", children: (0, react_jsx_runtime.jsx)(MermaidDiagram, { code: diagramText, t }) })
+										: (0, react_jsx_runtime.jsx)("div", {
+											className: "rq-insight",
+											children: (0, react_jsx_runtime.jsx)(InsightBody, { insightText, sources, t, withSources: true })
+										})
+								})
+							}) : null
+						]
+					})
+				]
+			}, `${option.key}`);
+		}
+		/**
+		* The survey wizard: one question per page over the live branch path,
+		* progress against the current path, hover insights, multi-select,
+		* free-text, skip/back, and minimize.
+		*/
+		function SurveyFlow({ survey, t }) {
+			const spec = survey.spec;
+			const hasIntro = typeof spec.intro === "string" && spec.intro.trim() !== "";
+			const [drafts, setDrafts] = (0, react.useState)(() => ({}));
+			const [cursor, setCursor] = (0, react.useState)(hasIntro ? -1 : 0);
+			const [busy, setBusy] = (0, react.useState)(null);
+			const [error, setError] = (0, react.useState)(null);
+			const [minimized, setMinimized] = (0, react.useState)(false);
+			// At most one option's panel is pinned open at a time (accordion),
+			// shared between the two content modes (text insight vs. diagram);
+			// never survives a question change.
+			const [expanded, setExpanded] = (0, react.useState)(null);
+			// Quick mode: an alternate intro-adjacent screen offering up to 6
+			// whole-survey answer templates instead of the question-by-question
+			// walk. Purely a client-side view switch — nothing to ask the host
+			// until a template is actually picked (which submits like any answer).
+			const [quickMode, setQuickMode] = (0, react.useState)(false);
+			const hasQuick = Array.isArray(spec.quick) && spec.quick.length > 0;
+
+			const toAnswers = (draftsValue) => {
+				const map = new Map();
+				for (const [questionId, draft] of Object.entries(draftsValue)) map.set(questionId, {
+					selected: draft.selected,
+					custom: draft.custom.trim(),
+					skipped: draft.skipped
+				});
+				return map;
+			};
+			const path = (0, react.useMemo)(() => computePath(spec, toAnswers(drafts)), [drafts]);
+			// The branch path shrinks/grows as answers change; keep the cursor in range.
+			(0, react.useEffect)(() => {
+				const floor = hasIntro ? -1 : 0;
+				setCursor((current) => Math.min(Math.max(current, floor), path.length - 1));
+			}, [path, hasIntro]);
+
+			const currentId = cursor >= 0 ? path[cursor] : undefined;
+			(0, react.useEffect)(() => { setExpanded(null); }, [currentId, quickMode]);
+			const current = currentId !== undefined ? spec.questions[currentId] : undefined;
+			const draft = currentId !== undefined && drafts[currentId] !== undefined ? drafts[currentId] : { selected: [], custom: "", skipped: false };
+			const isIntro = cursor === -1;
+			const isLast = !isIntro && cursor >= path.length - 1;
+			const answeredOf = (value) => value !== undefined && value.skipped !== true && (value.selected.length > 0 || value.custom.trim() !== "");
+			const answeredCount = path.filter((questionId) => answeredOf(drafts[questionId])).length;
+			const currentAnswered = answeredOf(draft);
+			const options = current?.options ?? [];
+			const allowCustom = current?.allowCustom !== false;
+
+			const updateDraft = (update) => {
+				if (currentId === undefined) return;
+				setDrafts((value) => ({ ...value, [currentId]: update(value[currentId] ?? { selected: [], custom: "", skipped: false }) }));
+				setError(null);
+			};
+			const choose = (key) => {
+				if (current?.multiSelect === true) updateDraft((value) => ({
+					...value,
+					selected: value.selected.includes(key) ? value.selected.filter((entry) => entry !== key) : [...value.selected, key],
+					skipped: false
+				}));
+				else updateDraft((value) => ({ selected: [key], custom: "", skipped: false }));
+			};
+			const onCustom = (value) => {
+				updateDraft((entry) => ({
+					...entry,
+					selected: current?.multiSelect === true ? entry.selected : [],
+					custom: value,
+					skipped: false
+				}));
+			};
+			const submitWith = (draftsValue) => {
+				const surveyPath = computePath(spec, toAnswers(draftsValue));
+				const entries = surveyPath.map((questionId) => {
+					const value = draftsValue[questionId];
+					const custom = value?.custom.trim() ?? "";
+					const selected = value?.selected ?? [];
+					const multi = spec.questions[questionId]?.multiSelect === true;
+					return {
+						id: questionId,
+						selected: custom === "" || multi ? selected : [],
+						...custom === "" ? {} : { custom }
+					};
+				});
+				setBusy("answer");
+				setError(null);
+				surveyStore.respond(survey.surveyId, { kind: "answer", answers: entries, path: surveyPath }).then(() => surveyStore.forget(survey.sessionId)).catch((cause) => {
+					setBusy(null);
+					setError(cause instanceof Error ? cause.message : String(cause));
+				});
+			};
+			// One option's panel open at a time, shared by text/diagram; picking
+			// the other mode on the same row swaps content without re-closing.
+			const toggleExpand = (key, mode) => {
+				setExpanded((value) => value !== null && value.key === key && value.mode === mode ? null : { key, mode });
+			};
+			// A quick template supplies a full (or partial) answers map keyed by
+			// question id; seed drafts from it and submit immediately — no
+			// separate confirmation step, that is the point of "quick".
+			const pickQuick = (quickOption) => {
+				const quickDrafts = {};
+				for (const [questionId, answer] of Object.entries(quickOption.answers ?? {})) quickDrafts[questionId] = {
+					selected: Array.isArray(answer?.selected) ? answer.selected : [],
+					custom: typeof answer?.custom === "string" ? answer.custom : "",
+					skipped: false
+				};
+				submitWith(quickDrafts);
+			};
+			const advance = () => {
+				if (isIntro) { setCursor(0); setError(null); return; }
+				if (!currentAnswered) { setError(t("error.unanswered")); return; }
+				if (isLast) submitWith(drafts);
+				else { setCursor((value) => value + 1); setError(null); }
+			};
+			const goBack = () => {
+				const floor = hasIntro ? -1 : 0;
+				setCursor((value) => Math.max(floor, value - 1));
+				setError(null);
+			};
+			const skip = () => {
+				if (currentId === undefined || current?.skippable === false) return;
+				const nextDrafts = { ...drafts, [currentId]: { selected: [], custom: "", skipped: true } };
+				const nextPath = computePath(spec, toAnswers(nextDrafts));
+				setDrafts(nextDrafts);
+				setError(null);
+				if (cursor >= nextPath.length - 1) submitWith(nextDrafts);
+				else setCursor((value) => value + 1);
+			};
+			// Shared by every terminal, non-answer action (cancel + the three
+			// intro-page pre-flight redirects): fire the request, mark busy,
+			// forget the survey once the host confirms.
+			const respondTerminal = (kind) => {
+				setBusy(kind);
+				setError(null);
+				surveyStore.respond(survey.surveyId, { kind }).then(() => surveyStore.forget(survey.sessionId)).catch((cause) => {
+					setBusy(null);
+					setError(cause instanceof Error ? cause.message : String(cause));
+				});
+			};
+			const cancel = () => respondTerminal("cancel");
+			// Pre-flight redirects: only meaningful before the first question is
+			// answered, so only wired up on the intro page (see footer below).
+			const reroll = () => respondTerminal("reroll");
+			const push = () => respondTerminal("push");
+			const discuss = () => respondTerminal("discuss");
+
+			const primaryLabel = isIntro ? t("action.start") : isLast ? t("action.submit") : t("action.next");
+			const progressPct = path.length === 0 ? 0 : Math.round((answeredCount / path.length) * 100);
+			return (0, react_jsx_runtime.jsx)("div", {
+				className: "rq-frame",
+				"data-survey-key": survey.surveyId,
+				children: (0, react_jsx_runtime.jsxs)("section", {
+					className: cx("rq-card", minimized && "rq-cardMinimized"),
+					"aria-label": typeof spec.title === "string" && spec.title !== "" ? spec.title : t("title.default"),
+					children: [
+						(0, react_jsx_runtime.jsxs)("header", {
+							className: "rq-header",
+							children: [
+								(0, react_jsx_runtime.jsxs)("div", {
+									className: "rq-headingBlock",
+									children: [
+										(0, react_jsx_runtime.jsxs)("div", {
+											className: "rq-eyebrow",
+											children: [
+												typeof spec.title === "string" && spec.title !== "" ? spec.title : t("title.default"),
+												quickMode ? (0, react_jsx_runtime.jsx)("span", { className: "rq-chip", children: t("quick.chip") }) : isIntro ? null : current?.header ? (0, react_jsx_runtime.jsx)("span", { className: "rq-chip", children: current.header }) : null
+											]
+										}),
+										(0, react_jsx_runtime.jsx)("h2", { className: "rq-title", children: quickMode ? t("quick.title") : isIntro ? (typeof spec.title === "string" && spec.title !== "" ? spec.title : t("title.default")) : current?.prompt ?? "" })
+									]
+								}),
+								(0, react_jsx_runtime.jsxs)("div", {
+									className: "rq-headerActions",
+									children: [
+										(0, react_jsx_runtime.jsx)("button", {
+											type: "button",
+											className: "rq-iconButton",
+											"aria-label": t(minimized ? "nav.maximize" : "nav.minimize"),
+											title: t(minimized ? "nav.maximize" : "nav.minimize"),
+											"aria-expanded": !minimized,
+											disabled: busy !== null,
+											onClick: () => setMinimized((value) => !value),
+											children: minimized ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutline14, {}) : (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronUpOutline14, {})
+										}),
+										(0, react_jsx_runtime.jsx)("button", {
+											type: "button",
+											className: "rq-iconButton",
+											"aria-label": t("nav.cancel"),
+											title: t("nav.cancel"),
+											disabled: busy !== null,
+											onClick: cancel,
+											children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCloseOutline16, {})
+										})
+									]
+								})
+							]
+						}),
+						!minimized ? (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, {
+							children: [
+								(0, react_jsx_runtime.jsxs)("div", {
+									className: "rq-body",
+									"data-survey-scroll": "true",
+									children: [
+										quickMode ? (0, react_jsx_runtime.jsx)("div", { className: "rq-detail", children: t("quick.subtitle") }) : null,
+										!quickMode && isIntro ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { text: spec.intro }) : null,
+										!quickMode && !isIntro && current.detail !== undefined ? (0, react_jsx_runtime.jsx)("div", { className: "rq-detail", children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownText, { text: current.detail }) }) : null,
+										quickMode ? (0, react_jsx_runtime.jsx)("div", {
+											role: "radiogroup",
+											"aria-label": t("quick.title"),
+											children: spec.quick.map((quickOption, index) => (0, react_jsx_runtime.jsx)(OptionRow, {
+												option: quickOption,
+												multi: false,
+												selected: false,
+												disabled: busy !== null,
+												expandedMode: expanded !== null && expanded.key === quickOption.key ? expanded.mode : null,
+												onChoose: () => pickQuick(quickOption),
+												onToggleExpand: (mode) => toggleExpand(quickOption.key, mode),
+												t
+											}, `${quickOption.key}-${String(index)}`))
+										}) : null,
+										!quickMode && !isIntro ? (0, react_jsx_runtime.jsx)("div", {
+											role: current?.multiSelect === true ? "group" : "radiogroup",
+											"aria-label": current?.prompt,
+											children: options.map((option, index) => (0, react_jsx_runtime.jsx)(OptionRow, {
+												option,
+												multi: current.multiSelect === true,
+												selected: draft.selected.includes(option.key),
+												disabled: busy !== null,
+												expandedMode: expanded !== null && expanded.key === option.key ? expanded.mode : null,
+												onChoose: choose,
+												onToggleExpand: (mode) => toggleExpand(option.key, mode),
+												t
+											}, `${option.key}-${String(index)}`))
+										}) : null,
+										!quickMode && !isIntro && allowCustom ? (0, react_jsx_runtime.jsx)(CustomRow, {
+											value: draft.custom,
+											placeholder: t("custom.placeholder"),
+											disabled: busy !== null,
+											active: draft.custom.trim() !== "",
+											onChange: onCustom,
+											onEnter: advance,
+											t
+										}) : null
+									]
+								}),
+								(0, react_jsx_runtime.jsxs)("footer", {
+									className: "rq-footer",
+									children: [
+										(0, react_jsx_runtime.jsxs)("div", {
+											className: "rq-pager",
+											children: [
+												(0, react_jsx_runtime.jsx)("button", {
+													type: "button",
+													className: "rq-iconButton",
+													"aria-label": t("nav.prev"),
+													disabled: quickMode ? busy !== null : isIntro || cursor === (hasIntro ? -1 : 0) || busy !== null,
+													onClick: quickMode ? () => setQuickMode(false) : goBack,
+													children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronLeftOutline14, {})
+												}),
+												quickMode || isIntro ? null : (0, react_jsx_runtime.jsx)("span", { className: "rq-bar", "aria-hidden": "true", children: (0, react_jsx_runtime.jsx)("span", { className: "rq-barFill", style: { width: `${progressPct}%` } }) }),
+												quickMode ? null : (0, react_jsx_runtime.jsx)("span", { className: "rq-progress", "aria-label": `${answeredCount} / ${path.length}`, children: isIntro ? `0 / ${String(path.length)}` : `${String(answeredCount)} / ${String(path.length)}` })
+											]
+										}),
+										(0, react_jsx_runtime.jsx)("div", { className: "rq-feedback", role: "status", children: error }),
+										(0, react_jsx_runtime.jsxs)("div", {
+											className: "rq-footerActions",
+											children: [
+												!quickMode && !isIntro && current?.skippable !== false ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+													variant: "outline",
+													disabled: busy !== null,
+													onClick: skip,
+													children: t("action.skip")
+												}) : null,
+												// Quick mode replaces the whole footer with just the back arrow
+												// above — picking a template submits directly, there is nothing
+												// else to press.
+												quickMode ? null : (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+													variant: "primary",
+													disabled: busy !== null || (!isIntro && !currentAnswered),
+													onClick: advance,
+													children: primaryLabel
+												}),
+												// Pre-flight redirects: only offered before the first question is
+												// answered — once the wizard has moved past the intro page,
+												// quick/reroll/pushing/discussing would abandon in-progress
+												// answers, so they only ever sit next to "Start".
+												!quickMode && isIntro && hasQuick ? (0, react_jsx_runtime.jsx)(PreflightButton, {
+													hint: t("action.quick.hint"),
+													disabled: busy !== null,
+													onClick: () => setQuickMode(true),
+													children: t("action.quick")
+												}) : null,
+												!quickMode && isIntro ? (0, react_jsx_runtime.jsx)(PreflightButton, {
+													hint: t("action.reroll.hint"),
+													disabled: busy !== null,
+													onClick: reroll,
+													children: t("action.reroll")
+												}) : null,
+												!quickMode && isIntro ? (0, react_jsx_runtime.jsx)(PreflightButton, {
+													hint: t("action.push.hint"),
+													disabled: busy !== null,
+													onClick: push,
+													children: t("action.push")
+												}) : null,
+												!quickMode && isIntro ? (0, react_jsx_runtime.jsx)(PreflightButton, {
+													hint: t("action.discuss.hint"),
+													disabled: busy !== null,
+													onClick: discuss,
+													children: t("action.discuss")
+												}) : null
+											]
+										})
+									]
+								})
+							]
+						}) : null
+					]
+				})
+			});
+		}
+		/** Composer occupant: renders the wizard for the selected session's pending survey. */
+		function SurveyComposer(props) {
+			// key by surveyId so a follow-up survey in the same session remounts with fresh drafts
+			return props.matched === void 0 ? null : (0, react_jsx_runtime.jsx)(SurveyFlow, { survey: props.matched, t: props.t, key: props.matched.surveyId });
+		}
+		//#endregion
+		//#region lib/index.js
+		/** Chain routing: claim the composer seat only while this session has a pending survey. */
+		function selectSurvey({ session }) {
+			const sessionId = session?.sessionId;
+			if (sessionId === void 0) return null;
+			return surveyStore.get(sessionId) ?? null;
+		}
+		const inject = ["slots", "locale"];
+		/**
+		* Client plugin body: locale dictionaries + the survey wizard into the
+		* conversation composer chain (the same seat the built-in question
+		* composer occupies; the two never claim one request — this one only
+		* claims its own pending surveys).
+		*/
+		function apply(ctx) {
+			// Hydrate at activation: SSE + reconciliation poll against the
+			// host-authoritative pending table, BEFORE any UI exists. Without
+			// this, selectSurvey always sees an empty store (see start() note).
+			ctx.effect(() => surveyStore.start(), "rich-questions: survey store hydration (SSE + poll)");
+			ctx.effect(() => ctx.locale.register(NS, { zh, en }), "rich-questions: dictionaries");
+			ctx.slots.inject("conversation.composer", () => ctx.slots.register({
+				name: "conversation.composer",
+				select: selectSurvey,
+				locale: NS
+			}, SurveyComposer));
+		}
+		exports.apply = apply;
+		exports.inject = inject;
+		return module.exports;
+	}
+});

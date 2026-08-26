@@ -1,0 +1,289 @@
+/**
+ * dsh-rich-questions — pure survey engine (branch graph + validation).
+ *
+ * ZERO dependencies and no I/O: this file is imported by the host half
+ * (src/host.js) and inlined, verbatim, into the browser bundle
+ * (src/client.bundle.js, region "survey-engine"). The host computes the
+ * authoritative answer path from the same function the client navigates
+ * with, so a claimed answer is re-derivable server-side. Keep both copies in
+ * sync when changing either.
+ *
+ * Model: a survey is a static, cycle-free directed graph of question nodes.
+ * The user walks it live: the questions actually presented are exactly the
+ * nodes reachable from `entry` under the answers given so far (computePath).
+ * Unreachable nodes are never asked and never answered.
+ */
+
+/** Normalise a `next` value (string | string[] | null | undefined) to an id list. */
+export function normalizeNext(value) {
+  if (value === null || value === undefined) return [];
+  if (typeof value === 'string') return value === '' ? [] : [value];
+  if (Array.isArray(value)) return value.filter((entry) => typeof entry === 'string' && entry !== '');
+  return [];
+}
+
+/**
+ * Compute the ordered question path for the current answers.
+ *
+ * @param {object} spec - validated survey spec ({ entry, questions }).
+ * @param {Map<string, {selected: string[], custom?: string, skipped?: boolean}>} [answers]
+ *   Current answers keyed by question id. A question counts as "answered
+ *   with a selection" only when `skipped` is falsy and `selected` is
+ *   non-empty; a custom-only, skipped, or absent answer follows the
+ *   question-level `next` instead of any option edge.
+ * @returns {string[]} Ordered question ids the user is asked.
+ *
+ * Edge semantics:
+ *  - Single-select: follow the selected option's `next`.
+ *  - Multi-select: follow every selected option's `next`, in option order,
+ *    depth-first per option (an option's branch is fully walked before the
+ *    next option's).
+ *  - An option with its own `next: null` ends its branch (contributes
+ *    nothing); an option without `next` falls through to the question-level
+ *    `next`; a skipped/custom-only question uses the question-level `next`.
+ *  - A node already on the path is never revisited (defensive; validateSpec
+ *    rejects cycles up front).
+ */
+export function computePath(spec, answers = new Map()) {
+  const nodes = spec.questions
+  const path = []
+  const seen = new Set()
+
+  const expand = (id) => {
+    if (typeof id !== 'string' || nodes[id] === undefined || seen.has(id)) return
+    seen.add(id)
+    path.push(id)
+    const node = nodes[id]
+    const answer = answers.get(id)
+    const nexts = []
+    const push = (list) => {
+      for (const entry of list) nexts.push(entry)
+    }
+    if (answer !== undefined && answer.skipped !== true && answer.selected.length > 0) {
+      for (const option of node.options ?? []) {
+        if (!answer.selected.includes(option.key)) continue
+        if (Object.hasOwn(option, 'next')) {
+          if (option.next !== null) push(normalizeNext(option.next))
+        } else {
+          push(normalizeNext(node.next))
+        }
+      }
+    } else {
+      push(normalizeNext(node.next))
+    }
+    for (const next of nexts) expand(next)
+  }
+
+  expand(spec.entry)
+  return path
+}
+
+/**
+ * Static validation of a model-authored survey spec.
+ * @param {unknown} raw - the `survey` argument.
+ * @param {{maxQuestions?: number, maxOptions?: number, maxInsight?: number, maxLabel?: number, maxDescription?: number, maxSources?: number, maxSource?: number, maxDiagram?: number, maxQuick?: number}} [limits]
+ * @returns {{ok: true, spec: object} | {ok: false, errors: string[]}}
+ */
+export function validateSpec(raw, limits = {}) {
+  const maxQuestions = limits.maxQuestions ?? 150
+  const maxOptions = limits.maxOptions ?? 40
+  const maxInsight = limits.maxInsight ?? 1500
+  const maxLabel = limits.maxLabel ?? 200
+  const maxDescription = limits.maxDescription ?? 400
+  const maxSources = limits.maxSources ?? 8
+  const maxSource = limits.maxSource ?? 500
+  const maxDiagram = limits.maxDiagram ?? 1200
+  const maxQuick = limits.maxQuick ?? 6
+  const errors = []
+  const fail = (message) => errors.push(message)
+  /** Shared by regular options and quick templates: sources array shape. */
+  const checkSources = (where, sources) => {
+    if (typeof sources === 'string') { fail(`${where}.sources must be an array of strings`); return }
+    if (typeof sources === 'undefined' || !Array.isArray(sources)) return
+    if (sources.length > maxSources) fail(`${where} has ${sources.length} sources (limit ${maxSources})`)
+    for (const source of sources) {
+      if (typeof source !== 'string' || source.trim() === '') fail(`${where}.sources entries must be non-empty strings`)
+      else if (source.length > maxSource) fail(`${where} has a source over ${maxSource} characters`)
+    }
+  }
+
+  if (typeof raw !== 'object' || raw === null) return { ok: false, errors: ['survey must be an object'] }
+
+  const { title, intro, entry, questions } = raw
+  if (typeof title === 'string' && title.trim() === '') fail('survey.title must be non-blank when present')
+  if (typeof title !== 'undefined' && typeof title !== 'string') fail('survey.title must be a string')
+  if (typeof intro !== 'undefined' && typeof intro !== 'string') fail('survey.intro must be a string')
+  if (typeof entry !== 'string' || entry.trim() === '') fail('survey.entry must be a non-empty question id')
+  if (typeof questions !== 'object' || questions === null || Array.isArray(questions)) {
+    return { ok: false, errors: errors.concat(['survey.questions must be an object map of question id -> node']) }
+  }
+
+  const ids = Object.keys(questions)
+  if (ids.length === 0) fail('survey.questions must contain at least one question')
+  if (ids.length > maxQuestions) fail(`survey.questions has ${ids.length} questions (limit ${maxQuestions})`)
+  if (ids.includes(entry) === false) fail(`survey.entry "${entry}" names no question`)
+
+  for (const id of ids) {
+    const node = questions[id]
+    const where = `questions.${id}`
+    if (typeof id !== 'string' || id.trim() === '') { fail('question ids must be non-empty strings'); continue }
+    if (typeof node !== 'object' || node === null) { fail(`${where} must be an object`); continue }
+    if (typeof node.prompt !== 'string' || node.prompt.trim() === '') fail(`${where}.prompt must be a non-empty string`)
+    if (typeof node.header !== 'undefined' && typeof node.header !== 'string') fail(`${where}.header must be a string`)
+    if (typeof node.detail !== 'undefined' && typeof node.detail !== 'string') fail(`${where}.detail must be a string (markdown)`)
+    if (typeof node.multiSelect !== 'undefined' && typeof node.multiSelect !== 'boolean') fail(`${where}.multiSelect must be a boolean`)
+    if (typeof node.allowCustom !== 'undefined' && typeof node.allowCustom !== 'boolean') fail(`${where}.allowCustom must be a boolean`)
+    if (typeof node.skippable !== 'undefined' && typeof node.skippable !== 'boolean') fail(`${where}.skippable must be a boolean`)
+    if (typeof node.next !== 'undefined' && typeof node.next !== 'string' && !Array.isArray(node.next)) fail(`${where}.next must be a question id or an id list`)
+
+    const keys = new Set()
+    if (typeof node.options !== 'undefined') {
+      if (!Array.isArray(node.options)) fail(`${where}.options must be an array`)
+      else {
+        if (node.options.length > maxOptions) fail(`${where} has ${node.options.length} options (limit ${maxOptions})`)
+        node.options.forEach((option, index) => {
+          const oWhere = `${where}.options[${index}]`
+          if (typeof option !== 'object' || option === null) { fail(`${oWhere} must be an object`); return }
+          if (typeof option.key !== 'string' || option.key.trim() === '') fail(`${oWhere}.key must be a non-empty string`)
+          if (typeof option.label !== 'string' || option.label.trim() === '') fail(`${oWhere}.label must be a non-empty string`)
+          if (option.label.length > maxLabel) fail(`${oWhere}.label exceeds ${maxLabel} characters`)
+          if (typeof option.description === 'string' && option.description.length > maxDescription) fail(`${oWhere}.description exceeds ${maxDescription} characters`)
+          if (typeof option.insight === 'string' && option.insight.length > maxInsight) fail(`${oWhere}.insight exceeds ${maxInsight} characters (~6 lines)`)
+          if (typeof option.diagram === 'string' && option.diagram.length > maxDiagram) fail(`${oWhere}.diagram exceeds ${maxDiagram} characters (keep it small — no scrolling)`)
+          if (typeof option.recommended !== 'undefined' && typeof option.recommended !== 'boolean') fail(`${oWhere}.recommended must be a boolean`)
+          checkSources(oWhere, option.sources)
+          if (typeof option.key === 'string' && option.key !== '') {
+            if (keys.has(option.key)) fail(`${where} has duplicate option key "${option.key}"`)
+            keys.add(option.key)
+          }
+        })
+      }
+    }
+  }
+
+  // Quick templates: up to maxQuick whole-survey answer bundles. Each names
+  // a subset (or all) of `questions` and, for each, the option keys/custom
+  // text that template implies — validated the same way a submitted answer
+  // batch is (see validateAnswers), just embedded in the spec instead of
+  // arriving over the wire.
+  if (typeof raw.quick !== 'undefined') {
+    if (!Array.isArray(raw.quick)) fail('survey.quick must be an array')
+    else {
+      if (raw.quick.length > maxQuick) fail(`survey.quick has ${raw.quick.length} entries (limit ${maxQuick})`)
+      const quickKeys = new Set()
+      raw.quick.forEach((quickOption, index) => {
+        const qWhere = `quick[${index}]`
+        if (typeof quickOption !== 'object' || quickOption === null) { fail(`${qWhere} must be an object`); return }
+        if (typeof quickOption.key !== 'string' || quickOption.key.trim() === '') fail(`${qWhere}.key must be a non-empty string`)
+        else if (quickKeys.has(quickOption.key)) fail(`survey.quick has duplicate key "${quickOption.key}"`)
+        else quickKeys.add(quickOption.key)
+        if (typeof quickOption.label !== 'string' || quickOption.label.trim() === '') fail(`${qWhere}.label must be a non-empty string`)
+        else if (quickOption.label.length > maxLabel) fail(`${qWhere}.label exceeds ${maxLabel} characters`)
+        if (typeof quickOption.description === 'string' && quickOption.description.length > maxDescription) fail(`${qWhere}.description exceeds ${maxDescription} characters`)
+        if (typeof quickOption.insight === 'string' && quickOption.insight.length > maxInsight) fail(`${qWhere}.insight exceeds ${maxInsight} characters (~6 lines)`)
+        if (typeof quickOption.diagram === 'string' && quickOption.diagram.length > maxDiagram) fail(`${qWhere}.diagram exceeds ${maxDiagram} characters (keep it small — no scrolling)`)
+        if (typeof quickOption.recommended !== 'undefined' && typeof quickOption.recommended !== 'boolean') fail(`${qWhere}.recommended must be a boolean`)
+        checkSources(qWhere, quickOption.sources)
+        if (typeof quickOption.answers !== 'object' || quickOption.answers === null || Array.isArray(quickOption.answers)) { fail(`${qWhere}.answers must be an object map of question id -> answer`); return }
+        for (const [questionId, answer] of Object.entries(quickOption.answers)) {
+          const aWhere = `${qWhere}.answers.${questionId}`
+          const node = questions[questionId]
+          if (node === undefined) { fail(`${aWhere} names no question`); continue }
+          if (typeof answer !== 'object' || answer === null) { fail(`${aWhere} must be an object`); continue }
+          if (typeof answer.selected !== 'undefined') {
+            if (!Array.isArray(answer.selected) || !answer.selected.every((key) => typeof key === 'string')) fail(`${aWhere}.selected must be an array of option keys`)
+            else {
+              const optionKeys = new Set((typeof node === 'object' && node !== null ? node.options ?? [] : []).map((option) => option.key))
+              for (const key of answer.selected) if (!optionKeys.has(key)) fail(`${aWhere}.selected key "${key}" is not an option of "${questionId}"`)
+            }
+          }
+          if (typeof answer.custom !== 'undefined' && typeof answer.custom !== 'string') fail(`${aWhere}.custom must be a string`)
+        }
+      })
+    }
+  }
+
+  // Referential integrity: every `next` (question- or option-level) must name
+  // an existing question id (or be null = branch end).
+  const refError = (where, ref) => fail(`${where} next "${ref}" names no question`)
+  for (const id of ids) {
+    const node = questions[id]
+    if (typeof node !== 'object' || node === null) continue
+    for (const ref of normalizeNext(node.next)) if (questions[ref] === undefined) refError(`questions.${id}`, ref)
+    for (let index = 0; index < (node.options ?? []).length; index += 1) {
+      const option = node.options[index]
+      if (typeof option !== 'object' || option === null) continue
+      if (Object.hasOwn(option, 'next') && option.next !== null) {
+        for (const ref of normalizeNext(option.next)) if (questions[ref] === undefined) refError(`questions.${id}.options[${index}]`, ref)
+      }
+    }
+  }
+
+  if (errors.length > 0) return { ok: false, errors }
+
+  // Cycle detection over the full edge graph (worst case: every option edge).
+  const adjacency = new Map()
+  for (const id of ids) {
+    const node = questions[id]
+    const targets = new Set(normalizeNext(node.next))
+    for (const option of node.options ?? []) {
+      if (Object.hasOwn(option, 'next') && option.next !== null) {
+        for (const ref of normalizeNext(option.next)) targets.add(ref)
+      }
+    }
+    adjacency.set(id, [...targets])
+  }
+  const white = new Set(ids)
+  const gray = new Set()
+  const visit = (id) => {
+    white.delete(id)
+    gray.add(id)
+    for (const next of adjacency.get(id) ?? []) {
+      if (white.has(next)) { if (visit(next) === true) return true }
+      else if (gray.has(next)) return true
+    }
+    gray.delete(id)
+    return false
+  }
+  for (const id of ids) if (white.has(id) && visit(id) === true) return { ok: false, errors: ['survey graph contains a cycle (a question can follow itself through option branches)'] }
+
+  return { ok: true, spec: { title, intro, entry, questions, ...(raw.quick !== undefined ? { quick: raw.quick } : {}) } }
+}
+
+/**
+ * Validate one submitted answer batch against the spec (host-side, mirrors
+ * the built-in matchesQuestions semantics): ids must exist, keys must belong
+ * to that question's options, single-select answers carry at most one key and
+ * never combine keys with custom text, and custom text must be non-blank.
+ *
+ * @param {object} spec - validated spec.
+ * @param {Array<{id: string, selected: string[], custom?: string}>} answers
+ * @returns {{ok: true, answers: Array<{id: string, selected: string[], custom?: string}>} | {ok: false, errors: string[]}}
+ */
+export function validateAnswers(spec, answers) {
+  const errors = []
+  if (!Array.isArray(answers)) return { ok: false, errors: ['answers must be an array'] }
+  const seen = new Set()
+  const clean = []
+  for (const answer of answers) {
+    if (typeof answer !== 'object' || answer === null) { errors.push('answers entries must be objects'); continue }
+    const { id, selected, custom } = answer
+    if (typeof id !== 'string' || spec.questions[id] === undefined) { errors.push(`answers id "${String(id)}" names no question`); continue }
+    if (seen.has(id)) { errors.push(`answers repeat question "${id}"`); continue }
+    seen.add(id)
+    if (!Array.isArray(selected) || !selected.every((key) => typeof key === 'string')) { errors.push(`answers for "${id}": selected must be an array of option keys`); continue }
+    if (new Set(selected).size !== selected.length) { errors.push(`answers for "${id}" repeat an option key`); continue }
+    const node = spec.questions[id]
+    const keys = new Set((node.options ?? []).map((option) => option.key))
+    for (const key of selected) if (!keys.has(key)) errors.push(`answers for "${id}": key "${key}" is not an option`)
+    const trimmed = typeof custom === 'string' ? custom.trim() : ''
+    if (typeof custom !== 'undefined' && typeof custom !== 'string') { errors.push(`answers for "${id}": custom must be a string`); continue }
+    if (node.multiSelect !== true) {
+      if (selected.length > 1) errors.push(`answers for "${id}" selects ${selected.length} options on a single-select question`)
+      if (trimmed !== '' && selected.length > 0) errors.push(`answers for "${id}" combines options with custom text on a single-select question`)
+    }
+    clean.push({ id, selected, ...(trimmed === '' ? {} : { custom: trimmed }) })
+  }
+  if (errors.length > 0) return { ok: false, errors }
+  return { ok: true, answers: clean }
+}

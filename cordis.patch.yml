@@ -1,0 +1,16 @@
+# dsh-rich-questions bundle patch: inserts the dual-face plugin row into the
+# profile roster.
+#
+# Node half (exports "."): registers the model-facing `ask_survey` tool
+# (globally visible to every agent preset), the host-authoritative pending
+# survey service, and the /api/rich-questions/* routes.
+#
+# Browser half (exports "./client", declared under dsh.client): the survey
+# wizard that takes over the conversation composer seat while a survey is
+# pending for the selected session.
+#
+# Deactivate from the profile's own cordis.patch.yml (later layer wins) or the
+# plugin-manager toggle:  { id: rich-questions, disabled: true }
+- insert:
+    - id: rich-questions
+      name: dsh-rich-questions
