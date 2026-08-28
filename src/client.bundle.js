@@ -694,6 +694,18 @@ a.rq-source:hover{text-decoration:underline}
 						bankedIds.add(answer.id);
 					}
 				}
+				// New surveyId (re-ask after cancel/crash): recover answers by spec hash.
+				if (Object.keys(drafts).length === 0 || bankedIds.size === 0) {
+					const recovery = loadRecovery(specHash(spec))
+					if (recovery !== null && Array.isArray(recovery.banked) && recovery.banked.length > 0) {
+						for (const [questionId, draft] of Object.entries(recovery.drafts ?? {})) {
+							if (questionId === "" || typeof draft !== "object" || draft === null) continue
+						if (spec.questions[questionId] === undefined || bankedIds.has(questionId)) continue
+						drafts[questionId] = { selected: Array.isArray(draft.selected) ? draft.selected : [], custom: typeof draft.custom === "string" ? draft.custom : "", skipped: draft.skipped === true }
+					}
+					for (const id of recovery.banked) if (typeof id === "string" && spec.questions[id] !== undefined) bankedIds.add(id)
+				}
+				}
 				const cursor = typeof persisted?.cursor === "number" ? persisted.cursor : undefined;
 				return { drafts, bankedIds, cursor, quickMode: persisted?.quickMode === true };
 			}, [survey.surveyId]);
