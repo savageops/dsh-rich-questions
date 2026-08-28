@@ -601,6 +601,30 @@ function surveyToolDefinition(ctx, service) {
  * draft/updated SSE frame so the client draft card stays live.
  */
 function draftToolDefinitions(ctx, service, structureQuestionCap) {
+  // Draft lifecycle tools return structured objects in every success path:
+  // summaries, checklist reads, and launched survey outcomes. Keep one
+  // permissive object schema here because the exact fields vary by operation
+  // while the registry still requires a canonical output projection.
+  const draftToolOutput = {
+    schema: {
+      type: 'object',
+      properties: {
+        op: { type: 'string' },
+        outcome: { type: 'string' },
+        slug: { type: 'string' },
+        title: { type: 'string' },
+        status: { type: 'string' },
+        revision: { type: 'integer' },
+        active: { type: 'boolean' },
+        file: { type: 'string' },
+        instruction: { type: 'string' },
+        draft: { type: 'string' },
+        draftReopened: { type: 'boolean' },
+        completeness: { type: 'object' },
+      },
+    },
+    render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
+  }
   const frameFor = (draft, completeness, file) => ({
     conversationId: draft.conversationId,
     slug: draft.slug,
@@ -644,6 +668,7 @@ function draftToolDefinitions(ctx, service, structureQuestionCap) {
         quick: { type: 'array', maxItems: 6, items: { type: 'object' }, description: 'op=patch: replace the quick templates — same shape as ask_survey quick [{key, label, description?, insight?, recommended?, answers: {qid: {selected}}}]. Author them last, over finished questions.' },
       },
     },
+    output: draftToolOutput,
     async execute(args, exec) {
       const agent = requireLiveRootAgent(ctx, exec)
       const store = draftStoreFor(exec, structureQuestionCap)
@@ -689,6 +714,7 @@ function draftToolDefinitions(ctx, service, structureQuestionCap) {
         slug: { type: 'string', description: 'Draft slug; omit for the conversation active draft.' },
       },
     },
+    output: draftToolOutput,
     async execute(args, exec) {
       const agent = requireLiveRootAgent(ctx, exec)
       const store = draftStoreFor(exec, structureQuestionCap)
@@ -720,6 +746,7 @@ function draftToolDefinitions(ctx, service, structureQuestionCap) {
         slug: { type: 'string', description: 'Draft slug; omit for the conversation active draft.' },
       },
     },
+    output: draftToolOutput,
     async execute(args, exec) {
       const agent = requireLiveRootAgent(ctx, exec)
       const store = draftStoreFor(exec, structureQuestionCap)

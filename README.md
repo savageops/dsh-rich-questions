@@ -6,7 +6,7 @@ Your agent doesn't just *send* a questionnaire — it *composes* one from the co
 
 > 富问题/问卷系统 — 由 agent 现场编写的分支问卷：每个答案决定下一题，每个选项自带洞察与流程图，直接在聊天输入框位置作答。
 
-MIT · zero runtime dependencies · DSH ≥ 0.1.1-rc.1 · Node ≥ 20
+MIT · zero runtime dependencies · DSH ≥ 0.1.2-alpha.1 · Node ≥ 20
 
 ```mermaid
 flowchart LR

@@ -27,6 +27,10 @@ const ctx = {
 apply(ctx, {})
 const byName = new Map(defs.map((def) => [def.name, def]))
 assert.equal(defs.length, 4, `expected 4 tools, got ${defs.map((d) => d.name).join(', ')}`)
+for (const definition of defs) {
+  assert.equal(definition.output?.schema?.type, 'object', `${definition.name} must declare an object output schema`)
+  assert.equal(typeof definition.output?.render, 'function', `${definition.name} must declare an output renderer`)
+}
 
 // Subscribe to the events route with a fake SSE response to collect frames.
 // The route keeps a heartbeat interval until 'close' fires; collect those
