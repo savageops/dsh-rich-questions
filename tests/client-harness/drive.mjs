@@ -31,14 +31,15 @@ const dom = new JSDOM('<!doctype html><html><body></body></html>', {
   pretendToBeVisual: true,
 })
 
-const pending = [{ surveyId: 'sv-1', sessionId: 'session-1', createdAt: Date.now(), spec: SPEC }]
+let pending = [{ surveyId: 'sv-1', sessionId: 'session-1', createdAt: Date.now(), spec: SPEC }]
+let draftsManifest = null
 global.window = dom.window
 global.document = dom.window.document
 global.localStorage = dom.window.localStorage
 global.EventSource = class { constructor() { throw new Error('harness: no SSE') } }
 global.fetch = async (url) => {
   const target = String(url)
-  if (target.includes('/state')) return { ok: true, json: async () => ({ surveys: pending }) }
+  if (target.includes('/state')) return { ok: true, json: async () => ({ surveys: pending, drafts: draftsManifest }) }
   if (target.includes('/action')) return { ok: true, json: async () => ({ ok: false, error: 'harness: action stubbed' }) }
   return { ok: false, json: async () => ({}) }
 }
@@ -183,6 +184,48 @@ step('matched=null renders empty, composer survives', () => {
   })
 })
 await flush()
+
+// Builder draft card: tracker-style, persists until dismissed, reappears on
+// revision change (a stale dismissal never hides active work).
+pending.length = 0 // the survey settled; the seat falls to the draft card
+draftsManifest = {
+  v: 1,
+  activeByConversation: { 'session-1': 'builder-demo' },
+  drafts: {
+    'builder-demo': { status: 'building', title: 'Question Builder demo', conversationId: 'session-1', updatedAt: Date.now(), revision: 2, ready: false, progress: { questions: 12, complete: 4, missingFields: 23 } },
+  },
+}
+document.dispatchEvent(new dom.window.Event('visibilitychange'))
+await flush()
+let cardMatched = registered.def.select({ session: { sessionId: 'session-1' } })
+step('seat falls from wizard to the draft card', () => {
+  assert(cardMatched !== null && cardMatched !== undefined, 'select returned nothing')
+  assert(cardMatched.slug === 'builder-demo', `select returned ${JSON.stringify(cardMatched).slice(0, 80)}`)
+})
+root.render(React.createElement(registered.Component, { matched: cardMatched, t }))
+await flush()
+step('draft card renders tracker UI', () => {
+  assert(text().includes('Question Builder demo'), 'draft title missing')
+  assert(text().includes(t('draft.status.building')), 'status chip missing')
+  assert(text().includes('4/12'), 'progress counts missing')
+  assert(text().includes('23'), 'missing-fields count absent')
+  assert(container.querySelector('.rq-draftCard') !== null, 'card element missing')
+})
+step('dismiss hides the card', () => {
+  const dismiss = buttons().find((b) => (b.getAttribute('aria-label') ?? '') === t('draft.dismiss'))
+  assert(dismiss !== undefined, 'dismiss button missing')
+  dismiss.click()
+})
+await flush()
+step('card hidden after dismissal', () => assert(container.querySelector('.rq-draftCard') === null, 'card still rendered'))
+draftsManifest.drafts['builder-demo'].revision = 3
+draftsManifest.drafts['builder-demo'].updatedAt = Date.now()
+document.dispatchEvent(new dom.window.Event('visibilitychange'))
+await flush()
+cardMatched = registered.def.select({ session: { sessionId: 'session-1' } })
+root.render(React.createElement(registered.Component, { matched: cardMatched, t }))
+await flush()
+step('revision bump re-shows the card', () => assert(container.querySelector('.rq-draftCard') !== null, 'card did not reappear after revision change'))
 
 if (POISON !== null) {
   step('poison: mount + start', () => {

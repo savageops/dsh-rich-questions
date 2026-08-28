@@ -15,7 +15,11 @@
  * builtins only (local-plugin convention).
  */
 import { randomUUID } from 'node:crypto'
-import { computePath, resolveSurveyArgument, validateAnswers, validateSpec } from './survey-engine.js'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import { computePath, draftCompleteness, resolveSurveyArgument, validateAnswers, validateSpec } from './survey-engine.js'
+import { createDraftStore } from './draft-store.js'
 
 const API_PREFIX = '/api/rich-questions'
 const HEARTBEAT_MS = 15_000
@@ -37,6 +41,30 @@ export const name = 'dsh-rich-questions'
 export const inject = ['tools', 'webServer', 'agents', 'systemPrompt']
 
 /**
+ * Machine-local plugin home (draft manifest, settled records):
+ * $DSH_RICH_QUESTIONS_HOME or ~/.dsh/rich-questions. Override env for
+ * profile-pinned installs; default is deliberately profile-agnostic so
+ * records survive profile switches.
+ */
+function pluginHome() {
+  return process.env.DSH_RICH_QUESTIONS_HOME ?? join(homedir(), '.dsh', 'rich-questions')
+}
+
+/**
+ * Per-call draft store. Draft files live in the session workspace
+ * (git-visible) when the session exposes a cwd; otherwise they fall back
+ * machine-local. All state is on disk, so per-call construction is stateless.
+ */
+function draftStoreFor(exec, structureQuestionCap) {
+  const workspaceRoot = exec.agent?.session?.header?.cwd
+  return createDraftStore({
+    ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
+    profileRoot: pluginHome(),
+    structureQuestionCap,
+  })
+}
+
+/**
  * Model-facing announcement: when to reach for ask_survey, the authoring
  * contract, and the answer shape. Kept tight — the tool description carries
  * the schema, this carries the judgment.
@@ -51,13 +79,15 @@ const ANNOUNCEMENT_EN = `dsh-rich-questions plugin installed (rich question/surv
 Language rule: author ALL user-facing survey content (title, intro, prompts, option labels/descriptions/insights, quick-template labels/insights) in the language the user is currently chatting in — an English conversation gets English content, 中文 gets 中文, any other language gets that language. Be consistent: one language across the whole survey. Option keys stay short ASCII letters (a, b, c...) regardless of language.
 Depth bar: a rich survey earns its place. For real expectation/alignment/scoping work, default to 10-30 questions — the 4-question threshold is the entry condition, not the target. Branch wherever one answer changes what matters next: any survey over 6 questions should carry at least 2-3 real branch points (option-level next routing to different question ranges), converging later where paths rejoin. Every question with options carries AT LEAST 5 (keys a-e, aim 5-8) — genuinely distinct stances a reader could disagree with, never filler; the free-text input row is separate and not counted. Give every option that involves judgment a real insight (what great looks like / tradeoff / (today)); use diagrams for architecture or flow choices; ship quick templates (3-6) whenever the user might already know their destination. A flat 4-question spec with no branching is a miss — if the topic genuinely needs only 1-3 flat questions, use ask_user_question instead.
 Reader-first doctrine (owner-mandated; applies to EVERY survey you author and to every reroll/push rewrite): write for the deciding user — plain-spoken, direct, zero fluff. Never assume the reader knows what you are referring to: spell out the obvious, define every term on first use, and anchor each question to the reader's situation and what their answer changes. Self-contained prompts (hard rule): every question must make sense standing alone to a reader who missed the conversation — no naked concept name-drops. If a prompt names a mechanism (a grace period, fencing, a cache layer), the same prompt defines it in a clause, says where in the reader's setup it applies, and what the answer changes. Violation: "How long does the grace period last?" Compliant: "When two sessions can write the same state, the older one gets fenced (its writes start being rejected) but keeps write access briefly — the grace period — so an in-flight command can finish. How long should that window be? Too short discards work mid-command; too long brings back two-writer confusion." Put longer backstory in detail (markdown) — never shrink the question into vagueness. Be specific and insightful — the strongest available form of specificity per claim: a number, a concrete example, or a named comparison; never a floating adjective. Obvious, not oblivious. Hard requirements: full structure always — an orienting intro (what this is, why now, what happens with the answers, roughly how long), header grouping, and a description line on every option; every insight on every judgment option carries what-great-looks-like + the tradeoff + (today) + one concrete handle; banned: vague-abstraction options (every option takes a position a reader could disagree with), one-sided selling insights, and judgment options without insights; quick templates ship on nearly every survey, as named stances ("Vercel-grade polish + DX", never "Option A").
-Authoring contract: {survey: {title?, intro? (markdown first page), entry (first question id), questions: {qid: {prompt, header? (grouping), detail? (markdown context), multiSelect?, allowCustom? (default true), skippable? (default true), options: [{key (arbitrary string, single letters a-z recommended, more for multi-select, "other" for free-text), label, description? (one sentence), insight? (markdown ~6 lines: what great looks like / tradeoff / (today) state), diagram? (optional compact Mermaid, few nodes — opened via the branch icon beside "?", panel does not scroll, keep it small), sources? (links or citations), recommended? (put first), next? (question id(s) that follow this option; null = branch ends; omit = fall back to question-level next)}], next? (question-level default: used on skip / free-text / options without their own next)}}}, quick? (up to 6 one-click templates, keys a-f not just a-d: [{key, label, description?, insight?, diagram?, recommended?, answers: {qid: {selected?: [key,...], custom?}}}]. The user sees these next to "Start" instead of answering question by question; picking one applies its answers verbatim and submits immediately, so each template's answers must be coherent and cover the questions its implied branch reaches — e.g. a positioning template like "the Vercel/Railway highest standard" decides a whole stance for the user)}}. Rules: entry required and must exist; every next target must exist; references and cycles are rejected at submit; unreachable questions are never asked. First-try checklist (the five most-rejected specs): (1) every id named in any next (question- or option-level) must exist in questions — re-check every next target after trimming or renaming questions, dangling references are the #1 rejection; (2) question-level next may be an id, an id list, or null (= no follow-up), never required; (3) the branch graph must be acyclic; (4) option keys unique per question; (5) a quick template's answers may name only questions its own selections actually reach, using option keys that exist on that question — multiple keys, or keys combined with custom text, only on multiSelect questions. Validation errors name the exact offending spot and, for dangling references, the nearest defined id and the id roster — one retry fixes it. Each option's insight should embed engineering judgment (what great looks like / tradeoff / (today) state). The result carries path (order actually asked), answers ({id, selected: [{key,label}], custom?}), skipped; store Q&A verbatim as numbered QA records and derive follow-ups from them. Next to "Start" the user can also press Quick/Reroll/Push/Discuss — all four return normally (not errors): quick = the user picks one of the quick templates, arrives as a normal answered result, no extra handling needed; reroll/push/discuss return those outcomes with an instruction field: reroll = rewrite the same topic in cleaner, better-spoken prose and call again; push = do DEEP web research first (minimum 12 competitors, open-source repos, .refs/ curated research) then expand and deepen the survey with evidence-grounded insights and call again; discuss = talk it through in chat first, do not immediately re-call.`
+Authoring contract: {survey: {title?, intro? (markdown first page), entry (first question id), questions: {qid: {prompt, header? (grouping), detail? (markdown context), multiSelect?, allowCustom? (default true), skippable? (default true), options: [{key (arbitrary string, single letters a-z recommended, more for multi-select, "other" for free-text), label, description? (one sentence), insight? (markdown ~6 lines: what great looks like / tradeoff / (today) state), diagram? (optional compact Mermaid, few nodes — opened via the branch icon beside "?", panel does not scroll, keep it small), sources? (links or citations), recommended? (put first), next? (question id(s) that follow this option; null = branch ends; omit = fall back to question-level next)}], next? (question-level default: used on skip / free-text / options without their own next)}}}, quick? (up to 6 one-click templates, keys a-f not just a-d: [{key, label, description?, insight?, diagram?, recommended?, answers: {qid: {selected?: [key,...], custom?}}}]. The user sees these next to "Start" instead of answering question by question; picking one applies its answers verbatim and submits immediately, so each template's answers must be coherent and cover the questions its implied branch reaches — e.g. a positioning template like "the Vercel/Railway highest standard" decides a whole stance for the user)}}. Rules: entry required and must exist; every next target must exist; references and cycles are rejected at submit; unreachable questions are never asked. First-try checklist (the five most-rejected specs): (1) every id named in any next (question- or option-level) must exist in questions — re-check every next target after trimming or renaming questions, dangling references are the #1 rejection; (2) question-level next may be an id, an id list, or null (= no follow-up), never required; (3) the branch graph must be acyclic; (4) option keys unique per question; (5) a quick template's answers may name only questions its own selections actually reach, using option keys that exist on that question — multiple keys, or keys combined with custom text, only on multiSelect questions. Validation errors name the exact offending spot and, for dangling references, the nearest defined id and the id roster — one retry fixes it. Each option's insight should embed engineering judgment (what great looks like / tradeoff / (today) state). The result carries path (order actually asked), answers ({id, selected: [{key,label}], custom?}), skipped; store Q&A verbatim as numbered QA records and derive follow-ups from them. Next to "Start" the user can also press Quick/Reroll/Push/Discuss — all four return normally (not errors): quick = the user picks one of the quick templates, arrives as a normal answered result, no extra handling needed; reroll/push/discuss return those outcomes with an instruction field: reroll = rewrite the same topic in cleaner, better-spoken prose and call again; push = do DEEP web research first (minimum 12 competitors, open-source repos, .refs/ curated research) then expand and deepen the survey with evidence-grounded insights and call again; discuss = talk it through in chat first, do not immediately re-call.
+Builder for big researched surveys (use INSTEAD of one giant ask_survey payload): survey_draft_set op=begin locks a full-frame skeleton (entry, ids, at least 5 option keys per option-bearing question — labels/prompts may be TODO: stubs — branch wiring validated on the spot); research (codebase, web, 9-12 competitors, docs) interleaved with survey_draft_set op=patch — at most 3 questions per call, prose only (prompt/header/detail/options label+description+insight+sources; branch wiring belongs to op=structure, allowed while the draft is under the question cap, each use bumps the revision); survey_draft_get returns the required-field checklist (per option: label, description, insight, at least 1 source are REQUIRED — get lists every gap); survey_draft_launch refuses anything still TODO:, then starts the wizard — reroll/push/discuss reopen the draft for editing instead of a from-scratch rebuild. Drafts persist as files (.dsh/survey-drafts/<slug>.json in the workspace; old drafts remain as reference), one active draft per conversation, a tracker-style card shows progress in the GUI, nothing ever expires, and every settled survey is recorded.`
 
 const ANNOUNCEMENT_ZH = `本机已安装 dsh-rich-questions 插件（富问题/问卷系统）：它把 ask_user_question 扩展为可分支的 ask_survey。需要向用户收集结构化意见/预期/验收状态且满足任一条件时用 ask_survey：≥4 个问题的问卷、超过 10 题的大问卷、问题间有分支（前题答案决定后题）、选项需要超过一句的解释（hover 洞察、来源、tradeoff）。1-3 个简单确认/单选题仍用 ask_user_question。
 语言规则：问卷全部用户可见内容（title、intro、prompt、选项 label/description/insight、quick 模板文案）一律使用用户当前聊天所用的语言——英文对话写英文，中文对话写中文，其他语言同理。整份问卷保持同一语言，不要混用；选项 key 无论如何都用短 ASCII 字母（a、b、c…）。
 深度基准：富问卷要对得起它的形态。真正的预期对齐/验收/范围调研默认 10-30 题——「≥4 题」只是入场门槛，不是目标。凡是「一个答案会改变后面该问什么」的地方都要分支：超过 6 题的问卷至少要有 2-3 个真实分支点（选项级 next 路由到不同的题目段），路径后面可以再汇合。凡带选项的问题至少 5 个选项（键 a–e，目标 5-8 个）——必须是真正有立场差异、读者可以反对的选项，绝不凑数；自由文本输入行单独存在，不计入选项数。涉及判断的选项都要有真正的 insight（什么是好 / tradeoff / (today) 现状）；架构或流程类选项配 diagram；用户可能已知道自己想要什么时，配 3-6 个 quick 模板。扁平无分支的 4 题问卷就是失误——如果确实只需要 1-3 个简单问题，直接用 ask_user_question。
 读者优先准则（owner 强制；适用于你编写的每一份问卷，以及每次 reroll/push 重写）：为正在做决定的用户而写——平实、直接、零废话。绝不假设读者知道你在指什么：把显而易见的说出来、首次出现的术语给定义、每个问题都锚定到读者的处境与「这个答案会改变什么」。问题自包含（硬性规则）：每个问题必须让没跟上对话的读者也能独立看懂——禁止裸概念。prompt 里出现的机制（宽限期、fencing、缓存层等）必须在同一句里给出定义、说明它在读者环境里的位置、以及这个答案会改变什么。反例：「宽限期应该多长？」；正例：「当两个会话都能写同一状态时，旧会话会被 fence（写入开始被拒绝），但会短暂保留写权限（宽限期）让进行中的命令跑完——这个窗口应该多长？太短会中途丢弃工作，太长会回到双写混乱。」较长的背景放 detail（markdown），绝不把问题压缩成模糊。具体而有洞见——每个论断用可用的最强具体形式：数字、实例或具名对比，绝不悬空形容词。Obvious，not oblivious（把话说明显，而不是想当然）。硬性要求：结构永远完整——导语页交代（这是什么、为什么现在问、答案会怎样使用、大约多长）、header 分组、每个选项必有 description 一行；每个判断型选项的 insight 必含 what-great-looks-like + tradeoff + (today) + 一个具体抓手；禁止：空泛抽象选项（每个选项都要有读者可以反对的立场）、单边推销式 insight、无 insight 的判断选项；几乎所有问卷都配 quick 模板，且模板是具名立场（「Vercel 级打磨 + DX」，绝不用「方案一」）。
-ask_survey 编写契约：参数 {survey: {title?, intro?(markdown 首屏), entry(首个问题 id), questions: {qid: {prompt, header?(分组), detail?(markdown 上下文), multiSelect?, allowCustom?(默认 true), skippable?(默认 true), options: [{key(任意字符串，建议单字母 a–z，多选可更多，需含 other 时用 key "other"), label, description?(一句话), insight?(markdown ~6 行：what great looks like / tradeoff / (today) 现状), diagram?(可选，紧凑 Mermaid 图，节点要少——用户点击「?」旁的分支图标展开，面板不滚动，图必须小到能整个塞进去), sources?(链接或引用), recommended?(推荐项放第一个), next?(选它后跟随的问题 id 或 id 数组；null=该分支结束；省略=用题目级 next)}], next?(题目级默认跟随：跳过/自由文本/选项未声明 next 时使用)}}, quick?(最多 6 个「一键模板」，键用 a–f 而非仅 a–d：[{key, label, description?, insight?, diagram?, recommended?, answers: {qid: {selected?:[key,...], custom?}}}]。用户在首屏点「快速」后看到这最多 6 个模板而不逐题作答；选中一个即用其 answers 直接套满全部题目并提交，因此每个模板的 answers 要连贯自洽、覆盖它所隐含分支触达的题目——例如"对标 Vercel/Railway 的最高标准"这类定位型模板，替用户把一整套倾向性答案都决定好)}}。规则：entry 必填且必须存在；所有 next 指向的问题必须存在；引用与环会在提交时被拒绝；未被分支到达的问题不会被问。首试自检（校验最常见的五种拒稿）：① 任何 next（题目级或选项级）指向的 id 必须存在于 questions——删题/改题名后务必逐个复查 next 目标，悬空引用是第一大拒稿原因；② 题目级 next 可以是 id、id 数组或 null（=无后续，等同省略），永远非必填；③ 分支图必须无环；④ 选项 key 每题唯一；⑤ quick 模板的 answers 只能引用其自身选择实际可达的题目、且 selected 必须是该题存在的选项 key——多个 key 或 key+custom 组合仅限 multiSelect 题。校验错误会精确指出出错位置，悬空引用还会给出最接近的已有 id 与全部 id 清单，一次重试即可修复。每个选项的 insight 应内嵌工程判断（什么是好、tradeoff、(today) 现状）。作答结果含 path（实际问到的问题顺序）、answers（每题 {id, selected:[{key,label}], custom?}）、skipped；请把 Q&A 逐字存为编号 QA 记录并据此推导后续条目。用户在问卷首屏「开始」按钮旁还可点「快速/重掷/深挖/讨论」——四者都会让 ask_survey 正常返回（非报错）：快速由用户直接从 quick 模板中选 1 个提交，走的是普通 answered 结果，你无需额外处理；reroll/push/discuss 的 outcome 分别为 reroll/push/discuss 并附 instruction 字段：reroll=同主题用更简洁地道的表达（跟随用户语言）重写后重新调用；push=先做深度网络调研（最少 12 个竞品/同类实现、GitHub 开源仓库、.refs/ 目录已有研究）再据此扩展加深问卷后重新调用——洞察必须引用具体证据；discuss=先在对话里讨论，不要立刻重新调用。`
+ask_survey 编写契约：参数 {survey: {title?, intro?(markdown 首屏), entry(首个问题 id), questions: {qid: {prompt, header?(分组), detail?(markdown 上下文), multiSelect?, allowCustom?(默认 true), skippable?(默认 true), options: [{key(任意字符串，建议单字母 a–z，多选可更多，需含 other 时用 key "other"), label, description?(一句话), insight?(markdown ~6 行：what great looks like / tradeoff / (today) 现状), diagram?(可选，紧凑 Mermaid 图，节点要少——用户点击「?」旁的分支图标展开，面板不滚动，图必须小到能整个塞进去), sources?(链接或引用), recommended?(推荐项放第一个), next?(选它后跟随的问题 id 或 id 数组；null=该分支结束；省略=用题目级 next)}], next?(题目级默认跟随：跳过/自由文本/选项未声明 next 时使用)}}, quick?(最多 6 个「一键模板」，键用 a–f 而非仅 a–d：[{key, label, description?, insight?, diagram?, recommended?, answers: {qid: {selected?:[key,...], custom?}}}]。用户在首屏点「快速」后看到这最多 6 个模板而不逐题作答；选中一个即用其 answers 直接套满全部题目并提交，因此每个模板的 answers 要连贯自洽、覆盖它所隐含分支触达的题目——例如"对标 Vercel/Railway 的最高标准"这类定位型模板，替用户把一整套倾向性答案都决定好)}}。规则：entry 必填且必须存在；所有 next 指向的问题必须存在；引用与环会在提交时被拒绝；未被分支到达的问题不会被问。首试自检（校验最常见的五种拒稿）：① 任何 next（题目级或选项级）指向的 id 必须存在于 questions——删题/改题名后务必逐个复查 next 目标，悬空引用是第一大拒稿原因；② 题目级 next 可以是 id、id 数组或 null（=无后续，等同省略），永远非必填；③ 分支图必须无环；④ 选项 key 每题唯一；⑤ quick 模板的 answers 只能引用其自身选择实际可达的题目、且 selected 必须是该题存在的选项 key——多个 key 或 key+custom 组合仅限 multiSelect 题。校验错误会精确指出出错位置，悬空引用还会给出最接近的已有 id 与全部 id 清单，一次重试即可修复。每个选项的 insight 应内嵌工程判断（什么是好、tradeoff、(today) 现状）。作答结果含 path（实际问到的问题顺序）、answers（每题 {id, selected:[{key,label}], custom?}）、skipped；请把 Q&A 逐字存为编号 QA 记录并据此推导后续条目。用户在问卷首屏「开始」按钮旁还可点「快速/重掷/深挖/讨论」——四者都会让 ask_survey 正常返回（非报错）：快速由用户直接从 quick 模板中选 1 个提交，走的是普通 answered 结果，你无需额外处理；reroll/push/discuss 的 outcome 分别为 reroll/push/discuss 并附 instruction 字段：reroll=同主题用更简洁地道的表达（跟随用户语言）重写后重新调用；push=先做深度网络调研（最少 12 个竞品/同类实现、GitHub 开源仓库、.refs/ 目录已有研究）再据此扩展加深问卷后重新调用——洞察必须引用具体证据；discuss=先在对话里讨论，不要立刻重新调用。
+大型调研问卷请用构建器（而不是一次性巨型 ask_survey）：survey_draft_set op=begin 锁骨架（entry、题目 id、每题 ≥5 个选项 key——label/prompt 可为 TODO: 占位——分支结构即时校验）；随后边调研（代码库/网络/9-12 竞品/文档）边用 op=patch 补内容（每次 ≤3 题，仅文字字段：prompt/header/detail/选项 label+description+insight+sources；分支改动走 op=structure，题数上限内允许，每次 revision+1）；survey_draft_get 返回必填项清单（每选项 label/description/insight/≥1 source 均必填，get 会列出全部缺口）；survey_draft_launch 拒绝任何 TODO: 残留，通过后启动向导——reroll/push/discuss 会把草稿转为可编辑状态而非推倒重来。草稿持久化为文件（工作区 .dsh/survey-drafts/<slug>.json，旧草稿留作参考），每会话一个活跃草稿，tracker 式卡片展示进度，永不过期，每份结束的问卷都会留档。`
 
 /** Locale-selected announcement: shipping both halves cost every session
  *  (including subagent children) ~4k tokens for a translation it never reads. */
@@ -128,17 +158,12 @@ function guard(req, res) {
  * tool's promise settles exactly once (settle deletes before resolving, so
  * the first claimant wins).
  */
-const SURVEY_TTL_MS = 30 * 60_000
-
 class SurveyHostService {
+  // No TTL sweeper by operator rule: a pending survey waits indefinitely —
+  // the only settle paths are the user's own actions (answer / cancel /
+  // preflight) or turn abort. Nothing expires on a timer.
   #pending = new Map()
   #subscribers = new Set()
-  #sweeper = setInterval(() => {
-    const now = Date.now()
-    for (const entry of this.#pending.values()) {
-      if (now - entry.createdAt > SURVEY_TTL_MS) this.settle(entry.surveyId, { outcome: 'cancelled', stale: true })
-    }
-  }, 60_000)
 
   /** Block until the user answers or cancels (or the turn aborts). */
   ask({ sessionId, spec, signal }) {
@@ -239,18 +264,45 @@ class SurveyHostService {
     if (entry === undefined) return { ok: false, error: 'not-pending' }
     this.#pending.delete(surveyId)
     if (entry.onAbort !== undefined) entry.signal?.removeEventListener('abort', entry.onAbort)
+    this.persistSettled(entry, result)
     this.#emit({ type: 'survey/resolved', surveyId, sessionId: entry.sessionId, ...result })
     // Every non-cancel outcome resolves the tool call with an actionable
     // result the model reads and acts on next turn; only an explicit cancel
-    // aborts the tool call as an error. A TTL expiry settles with
-    // stale: true — say THAT, not "user cancelled", or the operator reads a
-    // reaping as their own action.
-    if (result.outcome === 'cancelled') {
-      if (result.stale === true) entry.reject(new SurveyError(`the survey expired unanswered after ${Math.round(SURVEY_TTL_MS / 60_000)} minutes (TTL sweep — nobody cancelled it; the wizard disappears on expiry). Re-issue ask_survey when the user is back at the keyboard`, 'SURVEY_EXPIRED'))
-      else entry.reject(new SurveyError('the user cancelled the survey', 'SURVEY_CANCELLED'))
-    }
+    // aborts the tool call as an error.
+    if (result.outcome === 'cancelled') entry.reject(new SurveyError('the user cancelled the survey', 'SURVEY_CANCELLED'))
     else entry.resolve(result)
     return { ok: true, ...result }
+  }
+
+  /**
+   * Operator rule: nothing ends silently. Every settle persists a full
+   * record (spec + banked answers + outcome + answers/path when present)
+   * machine-locally, tracker-style, so any ended survey is recoverable.
+   * Best-effort by design — a persistence failure must never block the
+   * settle itself; only the record is lost.
+   */
+  persistSettled(entry, result) {
+    try {
+      const dir = join(pluginHome(), 'surveys')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, `${entry.surveyId}.json`), JSON.stringify({
+        v: 1,
+        surveyId: entry.surveyId,
+        sessionId: entry.sessionId,
+        outcome: result.outcome,
+        settledAt: Date.now(),
+        ...(entry.spec?.title !== undefined ? { title: entry.spec.title } : {}),
+        ...(entry.banked.size > 0 ? { banked: this.#bankedSnapshot(entry) } : {}),
+        ...(Array.isArray(result.answers) ? { answers: result.answers } : {}),
+        ...(Array.isArray(result.path) ? { path: result.path } : {}),
+        spec: entry.spec,
+      }, null, 2) + '\n', 'utf8')
+    } catch { /* best-effort record: settle proceeds, only the record is lost */ }
+  }
+
+  /** Push a builder-draft frame to SSE subscribers (draft-card hydration). */
+  emitDraft(frame) {
+    this.#emit({ type: 'draft/updated', ...frame })
   }
 
   subscribe(fn) {
@@ -265,7 +317,6 @@ class SurveyHostService {
   }
 
   dispose() {
-    clearInterval(this.#sweeper)
     for (const entry of this.#pending.values()) {
       if (entry.onAbort !== undefined) entry.signal?.removeEventListener('abort', entry.onAbort)
       entry.reject(new SurveyError('the rich-questions host service was disposed', 'SURVEY_ABORTED'))
@@ -275,15 +326,15 @@ class SurveyHostService {
   }
 }
 
-/** The three routes: state (GET), action (POST), events (SSE). */
-function makeRoutes(service) {
+/** The three routes: state (GET), action (POST), events (SSE). draftsSummary feeds builder-card hydration. */
+function makeRoutes(service, draftsSummary) {
   const state = {
     kind: 'exact',
     path: `${API_PREFIX}/state`,
-    handler: (req, res) => {
+    handler: async (req, res) => {
       if (req.method !== 'GET') { writeJson(res, 405, { ok: false, error: 'method-not-allowed' }); return }
       if (!guard(req, res)) return
-      writeJson(res, 200, { surveys: service.state() })
+      writeJson(res, 200, { surveys: service.state(), drafts: await draftsSummary() })
     },
   }
   const action = {
@@ -322,7 +373,7 @@ function makeRoutes(service) {
   const events = {
     kind: 'exact',
     path: `${API_PREFIX}/events`,
-    handler: (req, res) => {
+    handler: async (req, res) => {
       if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
       if (!guard(req, res)) return
       res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache', connection: 'keep-alive' })
@@ -332,10 +383,52 @@ function makeRoutes(service) {
       const close = () => { clearInterval(heartbeat); unsubscribe() }
       req.once('close', close)
       res.once('close', close)
-      push({ type: 'hello', surveys: service.state() })
+      push({ type: 'hello', surveys: service.state(), drafts: await draftsSummary() })
     },
   }
   return [state, action, events]
+}
+
+/**
+ * Human interaction is valid only for the exact live runtime root (same
+ * boundary the built-in userQuestions seam enforces).
+ */
+function requireLiveRootAgent(ctx, exec) {
+  const agent = exec.agent
+  if (agent === undefined) throw new SurveyError('survey interaction requires a session-owned agent', 'SURVEY_NO_AGENT')
+  const agents = ctx.agents
+  if (agents === undefined || agents.get(agent.id) !== agent) throw new SurveyError('survey interaction requires the exact live calling agent', 'SURVEY_CALLER_NOT_LIVE')
+  if (!agents.roots().includes(agent)) throw new SurveyError('survey interaction is unavailable while the calling agent is owned by another live agent; include the unresolved survey in the child agent\'s final result', 'SURVEY_DELEGATED_CALLER')
+  return agent
+}
+
+/** Shape an answered survey result for the model: labels resolved, answered/skipped split. */
+function shapeAnswered(spec, result) {
+  const path = result.path
+  const answersById = new Map(result.answers.map((answer) => [answer.id, answer]))
+  const answered = []
+  const skipped = []
+  for (const id of path) {
+    const answer = answersById.get(id)
+    const node = spec.questions[id]
+    if (answer !== undefined && (answer.selected.length > 0 || answer.custom !== undefined)) {
+      answered.push({
+        id,
+        selected: answer.selected.map((key) => ({ key, label: (node.options ?? []).find((option) => option.key === key)?.label ?? key })),
+        ...(answer.custom !== undefined ? { custom: answer.custom } : {}),
+        ...(answer.justifications !== undefined ? { justifications: answer.justifications } : {}),
+      })
+    } else {
+      skipped.push(id)
+    }
+  }
+  return {
+    outcome: 'answered',
+    ...(spec.title !== undefined ? { title: spec.title } : {}),
+    path,
+    answers: answered,
+    skipped,
+  }
 }
 
 /** The model-facing tool definition (JSON-schema subset of dsh-tools). */
@@ -470,13 +563,10 @@ function surveyToolDefinition(ctx, service) {
       render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
     },
     async execute(args, exec) {
-      // Human interaction is only valid for the exact live runtime root (same
-      // boundary the built-in userQuestions seam enforces).
-      const agent = exec.agent
-      if (agent === undefined) throw new SurveyError('survey interaction requires a session-owned agent', 'SURVEY_NO_AGENT')
-      const agents = ctx.agents
-      if (agents === undefined || agents.get(agent.id) !== agent) throw new SurveyError('survey interaction requires the exact live calling agent', 'SURVEY_CALLER_NOT_LIVE')
-      if (!agents.roots().includes(agent)) throw new SurveyError('survey interaction is unavailable while the calling agent is owned by another live agent; include the unresolved survey in the child agent\'s final result', 'SURVEY_DELEGATED_CALLER')
+      // Human interaction is only valid for the exact live runtime root
+      // (requireLiveRootAgent enforces the same boundary as the built-in
+      // userQuestions seam).
+      const agent = requireLiveRootAgent(ctx, exec)
 
       // The harness parses tool-call arguments leniently: valid JSON arrives
       // as an object, malformed JSON arrives as the raw text, empty as {}.
@@ -499,40 +589,179 @@ function surveyToolDefinition(ctx, service) {
       }
 
       // Shape the result for the model: labels resolved, answered/skipped split.
-      const path = result.path
-      const answersById = new Map(result.answers.map((answer) => [answer.id, answer]))
-      const answered = []
-      const skipped = []
-      for (const id of path) {
-        const answer = answersById.get(id)
-        const node = spec.questions[id]
-        if (answer !== undefined && (answer.selected.length > 0 || answer.custom !== undefined)) {
-          answered.push({
-            id,
-            selected: answer.selected.map((key) => ({ key, label: (node.options ?? []).find((option) => option.key === key)?.label ?? key })),
-            ...(answer.custom !== undefined ? { custom: answer.custom } : {}),
-            ...(answer.justifications !== undefined ? { justifications: answer.justifications } : {}),
-          })
-        } else {
-          skipped.push(id)
-        }
-      }
-      return {
-        outcome: 'answered',
-        ...(spec.title !== undefined ? { title: spec.title } : {}),
-        path,
-        answers: answered,
-        skipped,
-      }
+      return shapeAnswered(spec, result)
     },
   }
 }
 
-export function apply(ctx) {
+/**
+ * The builder lifecycle tools over the persistent draft store: get (checklist
+ * read), set (begin / patch / structure / discard), launch (completeness gate
+ * then the wizard, with reopen-on-reroll). Every successful op emits a
+ * draft/updated SSE frame so the client draft card stays live.
+ */
+function draftToolDefinitions(ctx, service, structureQuestionCap) {
+  const frameFor = (draft, completeness, file) => ({
+    conversationId: draft.conversationId,
+    slug: draft.slug,
+    title: draft.title,
+    status: draft.status,
+    revision: draft.revision,
+    updatedAt: draft.updatedAt,
+    ready: completeness.ready,
+    progress: completeness.totals,
+    ...(file !== undefined ? { file } : {}),
+  })
+  const summarize = (op, result) => ({
+    ...(op !== undefined ? { op } : {}),
+    slug: result.draft.slug,
+    title: result.draft.title,
+    status: result.draft.status,
+    revision: result.draft.revision,
+    active: true,
+    file: result.file,
+    completeness: {
+      ready: result.completeness.ready,
+      totals: result.completeness.totals,
+      incomplete: result.completeness.perQuestion.filter((entry) => entry.missing !== undefined),
+    },
+    ...(result.ignored !== undefined ? { ignored: result.ignored } : {}),
+  })
+  const setTool = {
+    name: 'survey_draft_set',
+    description: 'Builder write. op=begin: lock a skeleton {title, survey:{entry, questions}} — ids, >=5 option keys per option-bearing question (labels/prompts may be "TODO:" stubs), branch wiring; validated on the spot. op=patch: flesh out at most 3 questions per call with prose only (prompt/header/detail/multiSelect/allowCustom/skippable/options label+description+insight+sources — option "next" fields are structural and ignored). op=structure: replace the whole graph (allowed while under the question cap; bumps revision). op=discard: retire the active draft (file remains as reference). Drafts are persistent files; one active draft per conversation; old drafts remain.',
+    parameters: {
+      type: 'object',
+      required: ['op'],
+      additionalProperties: false,
+      properties: {
+        op: { type: 'string', enum: ['begin', 'patch', 'structure', 'discard'], description: 'Lifecycle operation.' },
+        title: { type: 'string', description: 'op=begin: survey title; seeds the draft slug.' },
+        survey: { type: 'object', description: 'op=begin/structure: the survey skeleton {title?, intro?, entry, questions} — same shape ask_survey takes; prompts/labels may be "TODO:" stubs, structure must validate.' },
+        slug: { type: 'string', description: 'op=patch/structure/discard: target draft; omit to use the conversation active draft.' },
+        questions: { type: 'object', description: 'op=patch: map of question id -> content patch {prompt?, header?, detail?, multiSelect?, allowCustom?, skippable?, options?} (options replaced wholesale when present).' },
+      },
+    },
+    async execute(args, exec) {
+      const agent = requireLiveRootAgent(ctx, exec)
+      const store = draftStoreFor(exec, structureQuestionCap)
+      const conversationId = agent.id
+      const resolveSlug = async () => {
+        if (typeof args.slug === 'string' && args.slug !== '') return args.slug
+        const active = await store.get({ conversationId })
+        if (!active.ok) throw new SurveyError(`survey_draft_set ${args.op} failed: ${active.error}`, 'SURVEY_DRAFT_MISSING')
+        return active.draft.slug
+      }
+      let outcome
+      if (args.op === 'begin') {
+        if (typeof args.survey !== 'object' || args.survey === null) throw new SurveyError('survey_draft_set op=begin requires survey {entry, questions}', 'SURVEY_DRAFT_BAD_OP')
+        outcome = await store.begin({ conversationId, title: typeof args.title === 'string' && args.title.trim() !== '' ? args.title : 'Draft survey', survey: args.survey })
+      } else if (args.op === 'patch') {
+        const slug = await resolveSlug()
+        outcome = await store.patch({ slug, questions: args.questions })
+      } else if (args.op === 'structure') {
+        const slug = await resolveSlug()
+        if (typeof args.survey !== 'object' || args.survey === null) throw new SurveyError('survey_draft_set op=structure requires survey {entry, questions}', 'SURVEY_DRAFT_BAD_OP')
+        outcome = await store.structure({ slug, survey: args.survey })
+      } else if (args.op === 'discard') {
+        const slug = await resolveSlug()
+        outcome = await store.discard(slug)
+        service.emitDraft({ conversationId, slug, status: 'discarded', updatedAt: Date.now() })
+        return { op: 'discard', slug, status: 'discarded' }
+      } else {
+        throw new SurveyError(`survey_draft_set received unknown op "${String(args.op)}"`, 'SURVEY_DRAFT_BAD_OP')
+      }
+      if (!outcome.ok) throw new SurveyError(`survey_draft_set ${args.op} failed: ${outcome.error}`, 'SURVEY_DRAFT_BAD_OP')
+      service.emitDraft(frameFor(outcome.draft, outcome.completeness, outcome.file))
+      return summarize(args.op, outcome)
+    },
+  }
+
+  const getTool = {
+    name: 'survey_draft_get',
+    description: 'Builder read: the draft (by slug, else the conversation active draft) with the required-field checklist — every option needs label, description, insight, and at least 1 source; every question needs a non-TODO prompt. Lists exactly what is missing before survey_draft_launch will pass.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        slug: { type: 'string', description: 'Draft slug; omit for the conversation active draft.' },
+      },
+    },
+    async execute(args, exec) {
+      const agent = requireLiveRootAgent(ctx, exec)
+      const store = draftStoreFor(exec, structureQuestionCap)
+      const got = await store.get({ ...(typeof args.slug === 'string' && args.slug !== '' ? { slug: args.slug } : {}), conversationId: agent.id })
+      if (!got.ok) throw new SurveyError(`survey_draft_get failed: ${got.error}`, 'SURVEY_DRAFT_MISSING')
+      return {
+        slug: got.draft.slug,
+        title: got.draft.title,
+        status: got.draft.status,
+        revision: got.draft.revision,
+        active: got.active === true,
+        file: got.file,
+        completeness: {
+          ready: got.completeness.ready,
+          totals: got.completeness.totals,
+          incomplete: got.completeness.perQuestion.filter((entry) => entry.missing !== undefined),
+        },
+      }
+    },
+  }
+
+  const launchTool = {
+    name: 'survey_draft_launch',
+    description: 'Launch the finished draft as the live wizard: validates structure, refuses any TODO: stub or missing required field (the checklist from survey_draft_get), then starts the wizard in the composer seat exactly like ask_survey. On reroll/push/discuss the draft is reopened for editing instead of discarded.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        slug: { type: 'string', description: 'Draft slug; omit for the conversation active draft.' },
+      },
+    },
+    async execute(args, exec) {
+      const agent = requireLiveRootAgent(ctx, exec)
+      const store = draftStoreFor(exec, structureQuestionCap)
+      const got = await store.get({ ...(typeof args.slug === 'string' && args.slug !== '' ? { slug: args.slug } : {}), conversationId: agent.id })
+      if (!got.ok) throw new SurveyError(`survey_draft_launch failed: ${got.error}`, 'SURVEY_DRAFT_MISSING')
+      const { draft, completeness, file } = got
+      const struct = validateSpec(draft.survey)
+      if (!struct.ok) throw new SurveyError(`survey_draft_launch blocked — fix the structure first (op=structure): ${struct.errors.join('; ')}`, 'SURVEY_DRAFT_BAD_SPEC')
+      if (!completeness.ready) {
+        const incomplete = completeness.perQuestion.filter((entry) => entry.missing !== undefined).map((entry) => `- ${entry.id}: ${entry.missing.join(', ')}`)
+        throw new SurveyError(`survey_draft_launch blocked — required fields still missing. Fix them with survey_draft_set op=patch, then relaunch:\n${incomplete.join('\n')}`, 'SURVEY_DRAFT_INCOMPLETE')
+      }
+      const spec = struct.spec
+      await store.markLaunched(draft.slug)
+      service.emitDraft(frameFor({ ...draft, status: 'launched' }, completeness, file))
+      const result = await service.ask({ sessionId: agent.id, spec, signal: exec.signal })
+      if (result.outcome === 'answered') return { ...shapeAnswered(spec, result), draft: draft.slug }
+      // Pre-flight redirects reopen the draft: the research investment
+      // survives the user's first reaction (operator rule).
+      await store.reopen(draft.slug)
+      service.emitDraft(frameFor({ ...draft, status: 'reopened' }, completeness, file))
+      return {
+        outcome: result.outcome,
+        instruction: PREFLIGHT_INSTRUCTIONS[result.outcome],
+        ...(spec.title !== undefined ? { title: spec.title } : {}),
+        draft: draft.slug,
+        draftReopened: true,
+      }
+    },
+  }
+
+  return [setTool, getTool, launchTool]
+}
+
+export function apply(ctx, config = {}) {
   const service = new SurveyHostService()
+  const structureQuestionCap = Number.isFinite(config?.structureQuestionCap) ? config.structureQuestionCap : 40
+  // Manifest-only store for route/card hydration (draft files themselves are
+  // resolved per-tool against the calling session's workspace).
+  const manifestStore = createDraftStore({ profileRoot: pluginHome(), structureQuestionCap })
+  const draftsSummary = async () => (await manifestStore.list()).manifest
 
   ctx.effect(() => {
-    const disposers = makeRoutes(service).map((route) => ctx.webServer.register(route))
+    const disposers = makeRoutes(service, draftsSummary).map((route) => ctx.webServer.register(route))
     return () => {
       for (const dispose of disposers.reverse()) dispose()
       service.dispose()
@@ -545,4 +774,5 @@ export function apply(ctx) {
     text: ANNOUNCEMENT,
   })
   ctx.tools.register(surveyToolDefinition(ctx, service))
+  for (const definition of draftToolDefinitions(ctx, service, structureQuestionCap)) ctx.tools.register(definition)
 }

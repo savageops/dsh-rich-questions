@@ -1,0 +1,158 @@
+/**
+ * Tests for the builder draft store: begin/patch/structure lifecycle against
+ * temp directories, the required-field checklist flow, the soft structure
+ * cap, one-active-draft-per-conversation, and old-drafts-remain semantics.
+ */
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtemp } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createDraftStore, slugifyTitle } from '../src/draft-store.js'
+
+const fiveKeys = ['a', 'b', 'c', 'd', 'e']
+const skeleton = () => ({
+  entry: 'q1',
+  questions: {
+    q1: { options: fiveKeys.map((key) => ({ key })) },
+  },
+})
+const fleshed = () => ({
+  prompt: 'Pick a branch?',
+  options: fiveKeys.map((key) => ({
+    key,
+    label: `Option ${key}`,
+    description: 'One sentence.',
+    insight: 'What great looks like.',
+    sources: ['some/file.ts'],
+  })),
+})
+
+async function freshStore(overrides = {}) {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'rq-ws-'))
+  const profileRoot = await mkdtemp(join(tmpdir(), 'rq-prof-'))
+  return { store: createDraftStore({ workspaceRoot, profileRoot, ...overrides }), workspaceRoot, profileRoot }
+}
+
+test('slugifyTitle kebab-cases and falls back', () => {
+  assert.equal(slugifyTitle('Question Builder — design lock!'), 'question-builder-design-lock')
+  assert.equal(slugifyTitle('   '), 'draft')
+})
+
+test('begin creates a stubbed draft, marks it active, and reports an unready checklist', async () => {
+  const { store } = await freshStore()
+  const begun = await store.begin({ conversationId: 'conv-1', title: 'API Deprecation Survey', survey: skeleton() })
+  assert.equal(begun.ok, true)
+  assert.equal(begun.draft.slug, 'api-deprecation-survey')
+  assert.equal(begun.draft.status, 'building')
+  assert.equal(begun.draft.survey.questions.q1.prompt, 'TODO: prompt for q1')
+  assert.equal(begun.completeness.ready, false)
+  assert.ok(begun.completeness.perQuestion[0].missing.includes('options[0].insight'))
+  const got = await store.get({ conversationId: 'conv-1' })
+  assert.equal(got.draft.slug, 'api-deprecation-survey')
+  assert.equal(got.active, true)
+  const list = await store.list()
+  const entry = list.manifest.drafts['api-deprecation-survey']
+  assert.equal(entry.ready, false)
+  assert.deepEqual(entry.progress, { questions: 1, complete: 0, missingFields: 21 })
+  assert.equal(entry.revision, 0)
+})
+
+test('begin slug collisions get numeric suffixes and old drafts remain', async () => {
+  const { store } = await freshStore()
+  await store.begin({ conversationId: 'conv-1', title: 'Same Topic', survey: skeleton() })
+  const second = await store.begin({ conversationId: 'conv-1', title: 'Same Topic', survey: skeleton() })
+  assert.equal(second.draft.slug, 'same-topic-2')
+  const list = await store.list()
+  assert.deepEqual(Object.keys(list.manifest.drafts).sort(), ['same-topic', 'same-topic-2'])
+  assert.equal(list.manifest.activeByConversation['conv-1'], 'same-topic-2')
+  const old = await store.get({ slug: 'same-topic' })
+  assert.equal(old.ok, true)
+})
+
+test('patch completes content, refuses >3 questions, unknown ids, and reports ignored next fields', async () => {
+  const { store } = await freshStore()
+  const { draft } = await store.begin({ conversationId: 'conv-1', title: 'T', survey: skeleton() })
+  const patched = await store.patch({ slug: draft.slug, questions: { q1: fleshed() } })
+  assert.equal(patched.ok, true)
+  assert.equal(patched.completeness.ready, true)
+  assert.equal(patched.draft.survey.questions.q1.prompt, 'Pick a branch?')
+
+  const tooMany = await store.patch({ slug: draft.slug, questions: { a: {}, b: {}, c: {}, d: {} } })
+  assert.match(tooMany.error, /at most 3 per call/)
+
+  const unknown = await store.patch({ slug: draft.slug, questions: { nope: { prompt: 'x' } } })
+  assert.match(unknown.error, /does not exist in draft/)
+
+  const structural = await store.patch({ slug: draft.slug, questions: { q1: { prompt: 'Again?', options: fiveKeys.map((key) => ({ key, label: `L${key}`, description: 'd', insight: 'i', sources: ['s'], next: 'q1' })) } } })
+  assert.equal(structural.ok, true)
+  assert.ok(structural.ignored.includes('q1.options[0].next'))
+  assert.equal(structural.draft.revision, 0, 'content patches never bump the structure revision')
+})
+
+test('structure replaces the graph and bumps the revision; the cap freezes it', async () => {
+  const { store } = await freshStore({ structureQuestionCap: 3 })
+  const { draft } = await store.begin({ conversationId: 'conv-1', title: 'T', survey: skeleton() })
+  const bigger = await store.structure({
+    slug: draft.slug,
+    survey: {
+      entry: 'q1',
+      questions: {
+        q1: fleshed(),
+        q2: { prompt: 'Follow-up?', options: fiveKeys.map((key) => ({ key, label: `L${key}` })) },
+      },
+    },
+  })
+  assert.equal(bigger.ok, true)
+  assert.equal(bigger.draft.revision, 1)
+  assert.equal(Object.keys(bigger.draft.survey.questions).length, 2)
+
+  const frozen = await store.structure({
+    slug: draft.slug,
+    survey: {
+      entry: 'q1',
+      questions: {
+        q1: fleshed(),
+        q2: { prompt: 'F2?', options: fiveKeys.map((key) => ({ key, label: `L${key}` })) },
+        q3: { prompt: 'F3?', options: fiveKeys.map((key) => ({ key, label: `L${key}` })) },
+      },
+    },
+  })
+  assert.equal(frozen.ok, false)
+  assert.match(frozen.error, /locked at 3 questions/)
+  const stillPatched = await store.patch({ slug: draft.slug, questions: { q1: fleshed() } })
+  assert.equal(stillPatched.ok, true, 'content patches continue under the freeze')
+})
+
+test('structure rejects an invalid graph with the draft-facing error', async () => {
+  const { store } = await freshStore()
+  const { draft } = await store.begin({ conversationId: 'conv-1', title: 'T', survey: skeleton() })
+  const broken = await store.structure({ slug: draft.slug, survey: { entry: 'q1', questions: { q1: { options: [{ key: 'a' }] } } } })
+  assert.equal(broken.ok, false)
+  assert.match(broken.error, /invalid draft structure/)
+})
+
+test('discard clears the active pointer but keeps the file as reference; reopen restores it', async () => {
+  const { store } = await freshStore()
+  const { draft } = await store.begin({ conversationId: 'conv-1', title: 'T', survey: skeleton() })
+  await store.discard(draft.slug)
+  const after = await store.get({ conversationId: 'conv-1' })
+  assert.equal(after.ok, false)
+  const reference = await store.get({ slug: draft.slug })
+  assert.equal(reference.draft.status, 'discarded')
+
+  await store.reopen(draft.slug)
+  const reopened = await store.get({ conversationId: 'conv-1' })
+  assert.equal(reopened.draft.status, 'reopened')
+  assert.equal(reopened.active, true)
+})
+
+test('markLaunched records status without touching the active pointer', async () => {
+  const { store } = await freshStore()
+  const { draft } = await store.begin({ conversationId: 'conv-1', title: 'T', survey: skeleton() })
+  await store.markLaunched(draft.slug)
+  const got = await store.get({ slug: draft.slug })
+  assert.equal(got.draft.status, 'launched')
+  const list = await store.list()
+  assert.equal(list.manifest.activeByConversation['conv-1'], draft.slug)
+})

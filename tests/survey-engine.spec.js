@@ -7,7 +7,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { computePath, resolveSurveyArgument, validateSpec } from '../src/survey-engine.js'
+import { computePath, draftCompleteness, isStub, resolveSurveyArgument, validateSpec } from '../src/survey-engine.js'
 
 const option = (key, extra = {}) => ({ key, label: `Option ${key}`, ...extra })
 const fiveOptions = (extra = {}) => ['a', 'b', 'c', 'd', 'e'].map((key) => option(key, { ...extra }))
@@ -121,4 +121,65 @@ test('a survey field of the wrong type fails cleanly', () => {
   const resolved = resolveSurveyArgument({ survey: '[1,2]' })
   assert.equal(resolved.ok, false)
   assert.match(resolved.error, /not a JSON object — got an array/)
+})
+
+test('isStub detects blank, absent, and TODO-marked fields', () => {
+  assert.equal(isStub(undefined), true)
+  assert.equal(isStub('   '), true)
+  assert.equal(isStub('TODO: working title'), true)
+  assert.equal(isStub('  TODO: indented'), true)
+  assert.equal(isStub('A real prompt'), false)
+})
+
+test('draftCompleteness reports ready for a fully fleshed draft', () => {
+  const spec = {
+    entry: 'q1',
+    questions: {
+      q1: {
+        prompt: 'Pick a branch?',
+        options: ['a', 'b', 'c', 'd', 'e'].map((key) => ({
+          key,
+          label: `Option ${key}`,
+          description: 'One sentence.',
+          insight: 'What great looks like.',
+          sources: ['dsh-rich-questions/src/survey-engine.js'],
+        })),
+      },
+    },
+  }
+  const report = draftCompleteness(spec)
+  assert.equal(report.ready, true)
+  assert.deepEqual(report.totals, { questions: 1, complete: 1, missingFields: 0 })
+  assert.deepEqual(report.perQuestion, [{ id: 'q1' }])
+})
+
+test('draftCompleteness lists every missing required field per question', () => {
+  const spec = {
+    entry: 'q1',
+    questions: {
+      q1: {
+        prompt: 'TODO: working title',
+        options: [{ key: 'a', label: 'TODO: stance', sources: ['  ', ''] }],
+      },
+      q2: { prompt: 'Real prompt' },
+    },
+  }
+  const report = draftCompleteness(spec)
+  assert.equal(report.ready, false)
+  const q1 = report.perQuestion.find((entry) => entry.id === 'q1')
+  assert.deepEqual(q1.missing, [
+    'prompt',
+    'options[0].label',
+    'options[0].description',
+    'options[0].insight',
+    'options[0].sources',
+  ])
+  const q2 = report.perQuestion.find((entry) => entry.id === 'q2')
+  assert.deepEqual(q2.missing, ['options: none declared'])
+  assert.equal(report.totals.questions, 2)
+  assert.equal(report.totals.complete, 0)
+})
+
+test('draftCompleteness refuses an empty question map', () => {
+  assert.equal(draftCompleteness({ entry: 'q1', questions: {} }).ready, false)
 })

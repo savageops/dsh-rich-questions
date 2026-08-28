@@ -317,6 +317,52 @@ export function validateSpec(raw, limits = {}) {
   return { ok: true, spec: { title, intro, entry, questions, ...(raw.quick !== undefined ? { quick: raw.quick } : {}) } }
 }
 
+/** A draft stub: blank, absent, or the explicit `TODO:` marker begin() writes. */
+export function isStub(value) {
+  return typeof value !== 'string' || value.trim() === '' || value.trimStart().startsWith('TODO')
+}
+
+/**
+ * Required-field completeness for a builder draft, per the operator's
+ * "make things required so it's obvious" rule: every question prompt and
+ * every option's label / description / insight / sources must be present
+ * and non-stub before launch. Structural rules (graph integrity, min-5
+ * options, size caps) stay in validateSpec; this report is the checklist
+ * survey_draft_get surfaces and survey_draft_launch enforces.
+ *
+ * @param {object} spec - draft survey spec ({ entry, questions }).
+ * @returns {{ready: boolean, totals: {questions: number, complete: number, missingFields: number}, perQuestion: Array<{id: string, missing?: string[]}>}}
+ */
+export function draftCompleteness(spec) {
+  const perQuestion = []
+  let questionsTotal = 0
+  let questionsDone = 0
+  let missingTotal = 0
+  for (const [id, node] of Object.entries(spec?.questions ?? {})) {
+    questionsTotal += 1
+    const missing = []
+    if (isStub(node?.prompt)) missing.push('prompt')
+    const options = Array.isArray(node?.options) ? node.options : []
+    if (options.length === 0) missing.push('options: none declared')
+    options.forEach((option, index) => {
+      const where = `options[${index}].`
+      if (isStub(option?.label)) missing.push(`${where}label`)
+      if (isStub(option?.description)) missing.push(`${where}description`)
+      if (isStub(option?.insight)) missing.push(`${where}insight`)
+      const sources = Array.isArray(option?.sources) ? option.sources.filter((source) => typeof source === 'string' && source.trim() !== '') : []
+      if (sources.length === 0) missing.push(`${where}sources`)
+    })
+    if (missing.length === 0) questionsDone += 1
+    missingTotal += missing.length
+    perQuestion.push(missing.length > 0 ? { id, missing } : { id })
+  }
+  return {
+    ready: questionsTotal > 0 && questionsDone === questionsTotal,
+    totals: { questions: questionsTotal, complete: questionsDone, missingFields: missingTotal },
+    perQuestion,
+  }
+}
+
 /**
  * Recover the survey spec from a possibly-degraded tool-call payload.
  *

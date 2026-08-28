@@ -75,6 +75,7 @@ window.__ModuleLoader__.load({
 		*/
 		function createSurveyStore() {
 			const bySession = new Map();
+			const draftsBySlug = new Map();
 			const listeners = new Set();
 			let started = false;
 			function notify() {
@@ -117,13 +118,43 @@ window.__ModuleLoader__.load({
 						bySession.delete(frame.sessionId);
 						notify();
 					}
+				} else if (frame.type === "draft/updated") {
+					// Live builder frame (every set op / launch / reopen). Discard
+					// clears the card; anything else upserts, merged over the
+					// hydrated frame so partial frames keep earlier fields.
+					if (typeof frame.slug !== "string") return;
+					if (frame.status === "discarded") draftsBySlug.delete(frame.slug);
+					else draftsBySlug.set(frame.slug, { ...(draftsBySlug.get(frame.slug) ?? {}), ...frame, __live: true });
+					notify();
 				} else if (frame.type === "hello") {
 					applyState(frame.surveys ?? []);
+					applyDrafts(frame.drafts);
 				}
+			}
+			/** Rebuild draft frames from a manifest snapshot (state route / hello). */
+			function applyDrafts(manifest) {
+				if (manifest === null || typeof manifest !== "object" || manifest === null) return;
+				const entries = manifest.drafts;
+				if (entries === null || typeof entries !== "object") return;
+				const next = new Map();
+				for (const [slug, entry] of Object.entries(entries)) {
+					if (entry === null || typeof entry !== "object" || entry.status === "discarded") continue;
+					next.set(slug, { slug, conversationId: entry.conversationId, title: entry.title, status: entry.status, updatedAt: entry.updatedAt, revision: entry.revision, ready: entry.ready, progress: entry.progress });
+				}
+				// Live frames may be fresher than the manifest (routes write the
+				// manifest after the SSE push): keep any live-only slug.
+				for (const [slug, frame] of draftsBySlug) if (frame.__live === true && !next.has(slug)) next.set(slug, frame);
+				const signature = JSON.stringify([...next.entries()]);
+				const previous = JSON.stringify([...draftsBySlug.entries()].map(([slug, frame]) => [slug, { slug, conversationId: frame.conversationId, title: frame.title, status: frame.status, updatedAt: frame.updatedAt, revision: frame.revision, ready: frame.ready, progress: frame.progress }]));
+				if (signature === previous) return;
+				draftsBySlug.clear();
+				for (const [slug, frame] of next) draftsBySlug.set(slug, frame);
+				notify();
 			}
 			function poll() {
 				fetch(`${API}/state`, { cache: "no-store" }).then((res) => (res.ok ? res.json() : null)).then((data) => {
 					if (data && Array.isArray(data.surveys)) applyState(data.surveys);
+					if (data && typeof data === "object") applyDrafts(data.drafts);
 				}).catch(() => {});
 			}
 			function start() {
@@ -143,6 +174,20 @@ window.__ModuleLoader__.load({
 			}
 			return {
 				get(sessionId) { return bySession.get(sessionId); },
+				/**
+				 * The conversation's active draft frame (tracker card), or
+				 * undefined. Launched/discarded drafts never claim the seat:
+				 * launched means the wizard owns it, discarded is gone.
+				 */
+				draftFor(sessionId) {
+					let best;
+					for (const frame of draftsBySlug.values()) {
+						if (frame.conversationId !== sessionId) continue;
+						if (frame.status === "launched" || frame.status === "discarded") continue;
+						if (best === undefined || (frame.updatedAt ?? 0) > (best.updatedAt ?? 0)) best = frame;
+					}
+					return best;
+				},
 				/**
 				 * Hydration MUST start at plugin activation, not on first
 				 * subscribe: the composer chain only mounts the wizard when
@@ -191,6 +236,16 @@ window.__ModuleLoader__.load({
 			"crash.title": "问卷渲染出错",
 			"crash.body": "渲染这份问卷时出了问题；对话输入区不受影响。可点击重试，或让模型重新发起问卷。",
 			"crash.retry": "重试渲染",
+			"draft.eyebrow": "问卷草稿",
+			"draft.complete": "题完成",
+			"draft.missing": "个必填缺口",
+			"draft.revision": "结构版本",
+			"draft.dismiss": "隐藏草稿卡片",
+			"draft.hint": "正在按构建器流程构建这份问卷（调研 + 小步补全）；构建完成会自动切换为问卷向导。",
+			"draft.status.building": "构建中",
+			"draft.status.launched": "已启动",
+			"draft.status.reopened": "已重开",
+			"draft.status.discarded": "已废弃",
 			"custom.placeholder": "输入你的答案",
 			"action.start": "开始",
 			"action.start.hint": "开始逐题作答——随时可以返回上一题或跳过。",
@@ -236,6 +291,16 @@ window.__ModuleLoader__.load({
 			"crash.title": "Survey render error",
 			"crash.body": "Something went wrong rendering this survey; the conversation composer is unaffected. Retry, or ask the model to re-issue the survey.",
 			"crash.retry": "Retry render",
+			"draft.eyebrow": "Survey draft",
+			"draft.complete": "questions complete",
+			"draft.missing": "required fields missing",
+			"draft.revision": "rev",
+			"draft.dismiss": "Hide draft card",
+			"draft.hint": "This survey is being built through the builder lifecycle (research + small patches); the wizard takes this seat automatically on launch.",
+			"draft.status.building": "Building",
+			"draft.status.launched": "Launched",
+			"draft.status.reopened": "Reopened",
+			"draft.status.discarded": "Discarded",
 			"custom.placeholder": "Type your answer",
 			"action.start": "Start",
 			"action.start.hint": "Begin the question-by-question walk — you can go back or skip anytime.",
@@ -388,6 +453,14 @@ a.rq-source:hover{text-decoration:underline}
 .rq-diagram{margin-top:8px;border:1px solid var(--dsw-alias-border-l2-darkmode-thin);background:var(--dsw-alias-markdown-code-block);border-radius:10px;max-height:240px;overflow:hidden;justify-content:center;align-items:center;padding:8px;display:flex}
 .rq-diagram svg{width:100%;height:auto;max-height:224px;display:block}
 .rq-diagramLoading,.rq-diagramError{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px}
+.rq-draftCard{width:100%;max-width:var(--dsh-chat-content-width);border:1px solid var(--dsw-alias-border-l2-darkmode-thin);background:var(--dsw-specific-input-major);border-radius:14px;padding:10px 14px;display:flex;flex-direction:column;gap:7px}
+.rq-draftCard,.rq-draftCard *{box-sizing:border-box}
+.rq-draftHead{display:flex;align-items:center;gap:8px;min-width:0}
+.rq-draftTitle{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:500;color:var(--dsw-alias-label-primary)}
+.rq-draftBarWrap{display:flex;align-items:center;gap:10px}
+.rq-draftBar{width:140px;height:4px}
+.rq-draftCounts{font-size:12px;line-height:16px;color:var(--dsw-alias-label-secondary);white-space:nowrap}
+.rq-draftHint{font-size:11px;line-height:15px;color:var(--dsw-alias-label-tertiary)}
 .rq-crash{margin:8px 0;padding:12px 14px;border:1px solid var(--dsw-alias-state-error-primary);border-radius:10px}
 .rq-crashTitle{font-weight:600;color:var(--dsw-alias-state-error-primary)}
 .rq-crashBody{margin-top:4px;font-size:12px;line-height:16px;color:var(--dsw-alias-label-secondary)}
@@ -1217,12 +1290,76 @@ a.rq-source:hover{text-decoration:underline}
 				return this.props.children;
 			}
 		}
+		const DRAFT_DISMISS_PREFIX = "dsh-rich-questions/draft-dismiss/";
+		function loadDraftDismissal(slug) {
+			try {
+				const raw = window.localStorage.getItem(DRAFT_DISMISS_PREFIX + slug);
+				if (raw === null) return null;
+				const parsed = JSON.parse(raw);
+				return parsed !== null && typeof parsed === "object" ? parsed : null;
+			} catch { return null }
+		}
+		function saveDraftDismissal(slug, value) {
+			try { window.localStorage.setItem(DRAFT_DISMISS_PREFIX + slug, JSON.stringify(value)) } catch { /* best-effort */ }
+		}
+		/**
+		* Tracker-style builder progress card (operator pattern: the tracking
+		* board / goal UI). Persists until dismissed — and a stale dismissal
+		* never hides active work: any revision or status change re-shows it.
+		* On launch the wizard takes the seat (draft frames stop claiming it),
+		* so the card closes into the wizard by construction.
+		*/
+		function DraftCard({ draft, t }) {
+			const [dismissed, setDismissed] = (0, react.useState)(() => loadDraftDismissal(draft.slug));
+			if (dismissed !== null && dismissed.revision === draft.revision && dismissed.status === draft.status) return null;
+			const progress = draft.progress ?? {};
+			const total = typeof progress.questions === "number" ? progress.questions : 0;
+			const done = typeof progress.complete === "number" ? progress.complete : 0;
+			const missing = typeof progress.missingFields === "number" ? progress.missingFields : 0;
+			const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+			const dismiss = () => {
+				const value = { revision: draft.revision, status: draft.status };
+				saveDraftDismissal(draft.slug, value);
+				setDismissed(value);
+			};
+			return (0, react_jsx_runtime.jsx)("div", { className: "rq-frame", children: (0, react_jsx_runtime.jsxs)("div", { className: "rq-draftCard", children: [
+				(0, react_jsx_runtime.jsxs)("div", { className: "rq-draftHead", children: [
+					(0, react_jsx_runtime.jsx)("span", { className: "rq-chip", children: t("draft.eyebrow") }),
+					(0, react_jsx_runtime.jsx)("span", { className: "rq-draftTitle", children: draft.title ?? draft.slug }),
+					(0, react_jsx_runtime.jsx)("span", { className: "rq-chip", children: t(`draft.status.${draft.status ?? "building"}`) }),
+					...(draft.revision !== undefined ? [(0, react_jsx_runtime.jsx)("span", { key: "rev", className: "rq-chip", children: `${t("draft.revision")} ${draft.revision}` })] : []),
+					(0, react_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "rq-iconButton",
+						"aria-label": t("draft.dismiss"),
+						title: t("draft.dismiss"),
+						onClick: dismiss,
+						children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCloseOutline16, {}),
+					}),
+				] }),
+				(0, react_jsx_runtime.jsxs)("div", { className: "rq-draftBarWrap", children: [
+					(0, react_jsx_runtime.jsx)("div", { className: "rq-bar rq-draftBar", children: (0, react_jsx_runtime.jsx)("div", { className: "rq-barFill", style: { width: `${String(pct)}%` } }) }),
+					(0, react_jsx_runtime.jsxs)("span", { className: "rq-draftCounts", children: [`${String(done)}/${String(total)} `, t("draft.complete"), ` · ${String(missing)} `, t("draft.missing")] }),
+				] }),
+				(0, react_jsx_runtime.jsx)("div", { className: "rq-draftHint", children: t("draft.hint") }),
+			] }) });
+		}
 		/** Composer occupant: renders the wizard for the selected session's pending survey. */
 		function SurveyComposer(props) {
 			// selectSurvey returns null (not undefined) when the viewed session
 			// has no pending survey — guard BOTH, or the key read crashes and
 			// React unmounts the whole composer seat.
 			if (props.matched == null) return null;
+			// Draft frames (builder card) carry slug; survey entries carry
+			// surveyId. Both render inside the boundary: a card crash must not
+			// kill the composer any more than a wizard crash may.
+			if (props.matched.surveyId === undefined) {
+				return (0, react_jsx_runtime.jsx)(SurveyBoundary, {
+					t: props.t,
+					key: `draft-${String(props.matched.slug)}`,
+					children: (0, react_jsx_runtime.jsx)(DraftCard, { draft: props.matched, t: props.t }),
+				});
+			}
 			// key by surveyId so a follow-up survey in the same session remounts with fresh drafts
 			return (0, react_jsx_runtime.jsx)(SurveyBoundary, {
 				t: props.t,
@@ -1232,11 +1369,11 @@ a.rq-source:hover{text-decoration:underline}
 		}
 		//#endregion
 		//#region lib/index.js
-		/** Chain routing: claim the composer seat only while this session has a pending survey. */
+		/** Chain routing: a pending survey claims the composer seat (the wizard); otherwise the conversation's active draft shows its tracker-style progress card. */
 		function selectSurvey({ session }) {
 			const sessionId = session?.sessionId;
 			if (sessionId === void 0) return null;
-			return surveyStore.get(sessionId) ?? null;
+			return surveyStore.get(sessionId) ?? surveyStore.draftFor(sessionId) ?? null;
 		}
 		const inject = ["slots", "locale"];
 		/**

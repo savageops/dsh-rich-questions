@@ -146,6 +146,27 @@ The tool now recovers what it can and otherwise names the real cause:
 
 Quick-template reachability errors now also list the path the template's selections actually reach (`reaches only: q1, q2a, q3`), so a wrong fork is a one-line fix instead of a guess.
 
+## Question builder
+
+For big, research-grounded surveys, one giant `ask_survey` payload is the wrong shape: slow to generate, truncation-prone on small local models, and it forces all research to finish before a word is written. The builder splits that into a lifecycle the model drives while researching:
+
+```
+survey_draft_set op=begin      lock a full-frame skeleton (ids, ≥5 option keys, branch wiring; prompts/labels may be "TODO:" stubs)
+  ↕  research (codebase / web / 9–12 competitors / docs) with your own tools
+survey_draft_set op=patch      flesh out ≤3 questions per call — prose only
+survey_draft_get               the required-field checklist (per option: label, description, insight, ≥1 source)
+survey_draft_launch            refuses any TODO:, then starts the wizard; reroll/push/discuss REOPEN the draft
+```
+
+Rules worth knowing:
+
+- **Drafts are files.** `.dsh/survey-drafts/<slug>.json` in the session workspace (git-diffable; old drafts remain as reference) with a machine-local manifest under `~/.dsh/rich-questions/drafts/index.json` (statuses, one active draft per conversation). No workspace? Drafts fall back machine-local.
+- **Soft structure lock.** `op=structure` (whole-graph replace) is allowed while the draft is under `structureQuestionCap` (cordis config, default 40); each use bumps a revision counter. Content patches always work, even under the freeze.
+- **Required, not blocked.** Every option's label/description/insight/sources and every prompt are required fields — `get` lists every gap continuously; launch is the only enforcement point.
+- **The draft card.** A tracker-style progress card occupies the composer seat while building (progress bar, counts, revision; persists until dismissed — and a stale dismissal never hides a revision or status change). On launch the wizard takes the seat; the card closes into it.
+- **No expiration.** Pending surveys wait indefinitely — the TTL sweeper is gone. The only settle paths are the user's own actions (answer / cancel / preflight) or a turn abort.
+- **Nothing ends silently.** Every settle persists a full record — spec, banked answers, outcome — to `~/.dsh/rich-questions/surveys/<surveyId>.json`, tracker-style.
+
 ## Result shapes
 
 Completed (manual walk, quick template, or a mix — indistinguishable):
