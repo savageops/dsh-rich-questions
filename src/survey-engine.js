@@ -50,7 +50,7 @@ export function computePath(spec, answers = new Map()) {
   const seen = new Set()
 
   const expand = (id) => {
-    if (typeof id !== 'string' || nodes[id] === undefined || seen.has(id)) return
+    if (typeof id !== 'string' || Object.hasOwn(nodes, id) === false || seen.has(id)) return
     seen.add(id)
     path.push(id)
     const node = nodes[id]
@@ -90,6 +90,10 @@ export function validateSpec(raw, limits = {}) {
   const maxInsight = limits.maxInsight ?? 1500
   const maxLabel = limits.maxLabel ?? 200
   const maxDescription = limits.maxDescription ?? 400
+  const maxPrompt = limits.maxPrompt ?? 4000
+  const maxDetail = limits.maxDetail ?? 8000
+  const maxIntro = limits.maxIntro ?? 8000
+  const maxTitle = limits.maxTitle ?? 300
   const maxSources = limits.maxSources ?? 8
   const maxSource = limits.maxSource ?? 500
   const maxDiagram = limits.maxDiagram ?? 1200
@@ -112,7 +116,9 @@ export function validateSpec(raw, limits = {}) {
   const { title, intro, entry, questions } = raw
   if (typeof title === 'string' && title.trim() === '') fail('survey.title must be non-blank when present')
   if (typeof title !== 'undefined' && typeof title !== 'string') fail('survey.title must be a string')
+  if (typeof title === 'string' && title.length > maxTitle) fail(`survey.title exceeds ${maxTitle} characters`)
   if (typeof intro !== 'undefined' && typeof intro !== 'string') fail('survey.intro must be a string')
+  if (typeof intro === 'string' && intro.length > maxIntro) fail(`survey.intro exceeds ${maxIntro} characters`)
   if (typeof entry !== 'string' || entry.trim() === '') fail('survey.entry must be a non-empty question id')
   if (typeof questions !== 'object' || questions === null || Array.isArray(questions)) {
     return { ok: false, errors: errors.concat(['survey.questions must be an object map of question id -> node']) }
@@ -129,6 +135,8 @@ export function validateSpec(raw, limits = {}) {
     if (typeof id !== 'string' || id.trim() === '') { fail('question ids must be non-empty strings'); continue }
     if (typeof node !== 'object' || node === null) { fail(`${where} must be an object`); continue }
     if (typeof node.prompt !== 'string' || node.prompt.trim() === '') fail(`${where}.prompt must be a non-empty string`)
+    else if (node.prompt.length > maxPrompt) fail(`${where}.prompt exceeds ${maxPrompt} characters`)
+    if (typeof node.detail === 'string' && node.detail.length > maxDetail) fail(`${where}.detail exceeds ${maxDetail} characters`)
     if (typeof node.header !== 'undefined' && typeof node.header !== 'string') fail(`${where}.header must be a string`)
     if (typeof node.detail !== 'undefined' && typeof node.detail !== 'string') fail(`${where}.detail must be a string (markdown)`)
     if (typeof node.multiSelect !== 'undefined' && typeof node.multiSelect !== 'boolean') fail(`${where}.multiSelect must be a boolean`)
@@ -188,6 +196,7 @@ export function validateSpec(raw, limits = {}) {
         if (typeof quickOption.recommended !== 'undefined' && typeof quickOption.recommended !== 'boolean') fail(`${qWhere}.recommended must be a boolean`)
         checkSources(qWhere, quickOption.sources)
         if (typeof quickOption.answers !== 'object' || quickOption.answers === null || Array.isArray(quickOption.answers)) { fail(`${qWhere}.answers must be an object map of question id -> answer`); return }
+        const quickAnswersById = new Map()
         for (const [questionId, answer] of Object.entries(quickOption.answers)) {
           const aWhere = `${qWhere}.answers.${questionId}`
           const node = questions[questionId]
@@ -200,6 +209,7 @@ export function validateSpec(raw, limits = {}) {
               for (const key of answer.selected) if (!optionKeys.has(key)) fail(`${aWhere}.selected key "${key}" is not an option of "${questionId}"`)
             }
           }
+          quickAnswersById.set(questionId, { selected: Array.isArray(answer?.selected) ? answer.selected : [], ...(typeof answer?.custom === 'string' && answer.custom.trim() !== '' ? { custom: answer.custom } : {}) })
           if (typeof answer.custom !== 'undefined' && typeof answer.custom !== 'string') fail(`${aWhere}.custom must be a string`)
           // Submit-time rules enforced early, so a bad template dies here at
           // authoring time instead of at user-click time.
@@ -208,6 +218,15 @@ export function validateSpec(raw, limits = {}) {
           if (node.multiSelect !== true) {
             if (selectedKeys.length > 1) fail(`${aWhere} selects ${selectedKeys.length} options on single-select question "${questionId}" — at most one`)
             if (selectedKeys.length > 0 && customText !== '') fail(`${aWhere} combines options with custom text on single-select question "${questionId}" — use one or the other`)
+          }
+        }
+        // Coverage rule (both ways): every question the template's implied
+        // branch reaches must carry an answer — otherwise the "no further
+        // questions asked" promise silently submits those as skipped.
+        if (errors.length === 0) {
+          const path = computePath({ entry, questions }, quickAnswersById)
+          for (const id of path) {
+            if (quickAnswersById.has(id) === false) fail(`${qWhere} does not answer "${id}", which its implied branch reaches — a quick template must cover every question it reaches`)
           }
         }
         // A template may only answer questions its own selections actually
@@ -250,12 +269,12 @@ export function validateSpec(raw, limits = {}) {
   for (const id of ids) {
     const node = questions[id]
     if (typeof node !== 'object' || node === null) continue
-    for (const ref of normalizeNext(node.next)) if (questions[ref] === undefined) refError(`questions.${id}`, ref)
+    for (const ref of normalizeNext(node.next)) if (Object.hasOwn(questions, ref) === false) refError(`questions.${id}`, ref)
     for (let index = 0; index < (node.options ?? []).length; index += 1) {
       const option = node.options[index]
       if (typeof option !== 'object' || option === null) continue
       if (Object.hasOwn(option, 'next') && option.next !== null) {
-        for (const ref of normalizeNext(option.next)) if (questions[ref] === undefined) refError(`questions.${id}.options[${index}]`, ref)
+        for (const ref of normalizeNext(option.next)) if (Object.hasOwn(questions, ref) === false) refError(`questions.${id}.options[${index}]`, ref)
       }
     }
   }
@@ -309,7 +328,7 @@ export function validateAnswers(spec, answers) {
   for (const answer of answers) {
     if (typeof answer !== 'object' || answer === null) { errors.push('answers entries must be objects'); continue }
     const { id, selected, custom } = answer
-    if (typeof id !== 'string' || spec.questions[id] === undefined) { errors.push(`answers id "${String(id)}" names no question`); continue }
+    if (typeof id !== 'string' || Object.hasOwn(spec.questions, id) === false) { errors.push(`answers id "${String(id)}" names no question`); continue }
     if (seen.has(id)) { errors.push(`answers repeat question "${id}"`); continue }
     seen.add(id)
     if (!Array.isArray(selected) || !selected.every((key) => typeof key === 'string')) { errors.push(`answers for "${id}": selected must be an array of option keys`); continue }

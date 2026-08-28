@@ -59,7 +59,12 @@ const ANNOUNCEMENT_ZH = `本机已安装 dsh-rich-questions 插件（富问题/�
 读者优先准则（owner 强制；适用于你编写的每一份问卷，以及每次 reroll/push 重写）：为正在做决定的用户而写——平实、直接、零废话。绝不假设读者知道你在指什么：把显而易见的说出来、首次出现的术语给定义、每个问题都锚定到读者的处境与「这个答案会改变什么」。问题自包含（硬性规则）：每个问题必须让没跟上对话的读者也能独立看懂——禁止裸概念。prompt 里出现的机制（宽限期、fencing、缓存层等）必须在同一句里给出定义、说明它在读者环境里的位置、以及这个答案会改变什么。反例：「宽限期应该多长？」；正例：「当两个会话都能写同一状态时，旧会话会被 fence（写入开始被拒绝），但会短暂保留写权限（宽限期）让进行中的命令跑完——这个窗口应该多长？太短会中途丢弃工作，太长会回到双写混乱。」较长的背景放 detail（markdown），绝不把问题压缩成模糊。具体而有洞见——每个论断用可用的最强具体形式：数字、实例或具名对比，绝不悬空形容词。Obvious，not oblivious（把话说明显，而不是想当然）。硬性要求：结构永远完整——导语页交代（这是什么、为什么现在问、答案会怎样使用、大约多长）、header 分组、每个选项必有 description 一行；每个判断型选项的 insight 必含 what-great-looks-like + tradeoff + (today) + 一个具体抓手；禁止：空泛抽象选项（每个选项都要有读者可以反对的立场）、单边推销式 insight、无 insight 的判断选项；几乎所有问卷都配 quick 模板，且模板是具名立场（「Vercel 级打磨 + DX」，绝不用「方案一」）。
 ask_survey 编写契约：参数 {survey: {title?, intro?(markdown 首屏), entry(首个问题 id), questions: {qid: {prompt, header?(分组), detail?(markdown 上下文), multiSelect?, allowCustom?(默认 true), skippable?(默认 true), options: [{key(任意字符串，建议单字母 a–z，多选可更多，需含 other 时用 key "other"), label, description?(一句话), insight?(markdown ~6 行：what great looks like / tradeoff / (today) 现状), diagram?(可选，紧凑 Mermaid 图，节点要少——用户点击「?」旁的分支图标展开，面板不滚动，图必须小到能整个塞进去), sources?(链接或引用), recommended?(推荐项放第一个), next?(选它后跟随的问题 id 或 id 数组；null=该分支结束；省略=用题目级 next)}], next?(题目级默认跟随：跳过/自由文本/选项未声明 next 时使用)}}, quick?(最多 6 个「一键模板」，键用 a–f 而非仅 a–d：[{key, label, description?, insight?, diagram?, recommended?, answers: {qid: {selected?:[key,...], custom?}}}]。用户在首屏点「快速」后看到这最多 6 个模板而不逐题作答；选中一个即用其 answers 直接套满全部题目并提交，因此每个模板的 answers 要连贯自洽、覆盖它所隐含分支触达的题目——例如"对标 Vercel/Railway 的最高标准"这类定位型模板，替用户把一整套倾向性答案都决定好)}}。规则：entry 必填且必须存在；所有 next 指向的问题必须存在；引用与环会在提交时被拒绝；未被分支到达的问题不会被问。首试自检（校验最常见的五种拒稿）：① 任何 next（题目级或选项级）指向的 id 必须存在于 questions——删题/改题名后务必逐个复查 next 目标，悬空引用是第一大拒稿原因；② 题目级 next 可以是 id、id 数组或 null（=无后续，等同省略），永远非必填；③ 分支图必须无环；④ 选项 key 每题唯一；⑤ quick 模板的 answers 只能引用其自身选择实际可达的题目、且 selected 必须是该题存在的选项 key——多个 key 或 key+custom 组合仅限 multiSelect 题。校验错误会精确指出出错位置，悬空引用还会给出最接近的已有 id 与全部 id 清单，一次重试即可修复。每个选项的 insight 应内嵌工程判断（什么是好、tradeoff、(today) 现状）。作答结果含 path（实际问到的问题顺序）、answers（每题 {id, selected:[{key,label}], custom?}）、skipped；请把 Q&A 逐字存为编号 QA 记录并据此推导后续条目。用户在问卷首屏「开始」按钮旁还可点「快速/重掷/深挖/讨论」——四者都会让 ask_survey 正常返回（非报错）：快速由用户直接从 quick 模板中选 1 个提交，走的是普通 answered 结果，你无需额外处理；reroll/push/discuss 的 outcome 分别为 reroll/push/discuss 并附 instruction 字段：reroll=同主题用更简洁地道的表达（跟随用户语言）重写后重新调用；push=先做深度网络调研（最少 12 个竞品/同类实现、GitHub 开源仓库、.refs/ 目录已有研究）再据此扩展加深问卷后重新调用——洞察必须引用具体证据；discuss=先在对话里讨论，不要立刻重新调用。`
 
-export const ANNOUNCEMENT = `[dsh-rich-questions | EN]\n${ANNOUNCEMENT_EN}\n\n[dsh-rich-questions | 中文]\n${ANNOUNCEMENT_ZH}`
+/** Locale-selected announcement: shipping both halves cost every session
+ *  (including subagent children) ~4k tokens for a translation it never reads. */
+export const ANNOUNCEMENT = (() => {
+  const locale = process.env.LANG ?? process.env.LC_ALL ?? ''
+  return /^zh/i.test(locale) ? ANNOUNCEMENT_ZH : ANNOUNCEMENT_EN
+})()
 
 /**
  * Instruction text returned (not thrown) for the three intro-page pre-flight
@@ -70,6 +75,8 @@ const PREFLIGHT_INSTRUCTIONS = {
   reroll: 'The user hit "Reroll" before starting: they want the same survey topic, branching intent, and structure, rewritten from scratch under the reader-first doctrine — same bones, obvious flesh: define every term on first use, add concrete examples and named comparisons, shorten sentences, anchor each question to the user\'s situation and what their answer changes, plain-spoken and direct (in the language the user is chatting in). No jargon, no filler, no floating adjectives. Call ask_survey again with the rewritten spec; do not ask the user anything first.',
   push: 'The user hit "Push" before starting: they want the survey pushed deeper — both deeper AND broader, grounded in RESEARCH, not intuition. Before calling ask_survey again, you MUST do ALL of the following: (1) AGGRESSIVE web research — search for competitors and comparable products solving this exact problem; find and study a MINIMUM of 12 competitors or comparable implementations. For each, capture: what they do differently, their architecture/approach, their key tradeoff, and what they got right that we have not. (2) Research OPEN-SOURCE repositories doing similar things — search GitHub and code hosting for projects in this space; read their READMEs, issue trackers, and design docs for real patterns and lessons learned. (3) Read the workspace .refs/ directory if it exists — it contains curated research references; use them and note what additional research is still needed. (4) Pull in any additional local context that sharpens the questions. Then expand and sharpen the survey: more thorough questions and options, insights grounded in SPECIFIC evidence from what you found (numbers, named comparisons, real patterns from the 12+ competitors), and new branch dimensions where they add precision — all while keeping full reader-first structure. Your survey options should read like they were written by someone who has studied the entire competitive landscape, not someone guessing. Call ask_survey again with the expanded, better-informed spec; do not ask the user anything first.',
   discuss: 'The user hit "Discuss" before starting: they do not want the form yet. Do not call ask_survey again immediately. Instead open a normal conversational discussion in chat about the survey\'s subject — ask clarifying questions, share your thinking — and only propose calling ask_survey again once the discussion converges on a clear direction.',
+  superseded: 'A newer ask_survey call from the same session superseded this survey before the user answered it. Treat this call as cancelled: continue with whatever the newer survey returns; do not re-issue this one unless the user asks.',
+  stale: 'This survey expired unanswered after 30 minutes and was cancelled. If the questions still matter, re-issue ask_survey (ideally fewer or sharper questions); otherwise continue without it.',
 }
 
 class SurveyError extends Error {
@@ -121,9 +128,17 @@ function guard(req, res) {
  * tool's promise settles exactly once (settle deletes before resolving, so
  * the first claimant wins).
  */
+const SURVEY_TTL_MS = 30 * 60_000
+
 class SurveyHostService {
   #pending = new Map()
   #subscribers = new Set()
+  #sweeper = setInterval(() => {
+    const now = Date.now()
+    for (const entry of this.#pending.values()) {
+      if (now - entry.createdAt > SURVEY_TTL_MS) this.settle(entry.surveyId, { outcome: 'cancelled', stale: true })
+    }
+  }, 60_000)
 
   /** Block until the user answers or cancels (or the turn aborts). */
   ask({ sessionId, spec, signal }) {
@@ -134,6 +149,13 @@ class SurveyHostService {
       if (signal !== undefined) {
         entry.onAbort = () => this.settle(surveyId, { outcome: 'cancelled' })
         signal.addEventListener('abort', entry.onAbort, { once: true })
+      }
+      // One pending survey per session (review P1): the client store keys by
+      // sessionId, so a second concurrent ask would strand the first forever.
+      // The newest intent wins; the superseded call settles with a distinct
+      // outcome the model can act on.
+      for (const prior of this.#pending.values()) {
+        if (prior.sessionId === sessionId) this.settle(prior.surveyId, { outcome: 'superseded' })
       }
       this.#pending.set(surveyId, entry)
       this.#emit({ type: 'survey/requested', surveyId, sessionId, createdAt: entry.createdAt, spec })
@@ -180,6 +202,15 @@ class SurveyHostService {
     const check = validateAnswers(entry.spec, answers)
     if (!check.ok) return { ok: false, error: check.errors.join('; ') }
     const answersById = new Map(check.answers.map((answer) => [answer.id, { selected: answer.selected, custom: answer.custom }]))
+    // Banked answers are a lock, not a suggestion (review P2): a submission
+    // that omits or changes a banked answer is rejected, not silently applied.
+    for (const [id, banked] of entry.banked) {
+      const submitted = answersById.get(id)
+      const same = submitted !== undefined
+        && JSON.stringify(submitted.selected ?? []) === JSON.stringify(banked.selected ?? [])
+        && (submitted.custom ?? undefined) === (banked.custom ?? undefined)
+      if (same === false) return { ok: false, error: `answer for "${id}" conflicts with its banked (locked) answer — banked answers cannot be changed` }
+    }
     const path = computePath(entry.spec, answersById)
     const reached = new Set(path)
     for (const answer of check.answers) if (!reached.has(answer.id)) return { ok: false, error: `answers include "${answer.id}" which the branch path does not reach` }
@@ -229,6 +260,7 @@ class SurveyHostService {
   }
 
   dispose() {
+    clearInterval(this.#sweeper)
     for (const entry of this.#pending.values()) {
       if (entry.onAbort !== undefined) entry.signal?.removeEventListener('abort', entry.onAbort)
       entry.reject(new SurveyError('the rich-questions host service was disposed', 'SURVEY_ABORTED'))

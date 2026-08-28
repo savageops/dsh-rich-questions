@@ -37,7 +37,7 @@ window.__ModuleLoader__.load({
 			const path = [];
 			const seen = new Set();
 			const expand = (id) => {
-				if (typeof id !== "string" || nodes[id] === undefined || seen.has(id)) return;
+				if (typeof id !== "string" || Object.hasOwn(nodes, id) === false || seen.has(id)) return;
 				seen.add(id);
 				path.push(id);
 				const node = nodes[id];
@@ -453,7 +453,7 @@ a.rq-source:hover{text-decoration:underline}
 		 * nowhere in the host app, so this pulls the ESM build from a CDN on
 		 * first use only (a one-time browser-cached fetch, not a bundle cost).
 		 */
-		const MERMAID_CDN_URL = "https://cdn.jsdelivr.net/npm/mermaid@11/+esm";
+		const MERMAID_CDN_URL = "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/+esm";
 		let mermaidLoad;
 		function loadMermaid() {
 			if (mermaidLoad === undefined) mermaidLoad = import(/* @vite-ignore */ MERMAID_CDN_URL).then((module) => {
