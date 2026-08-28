@@ -188,6 +188,9 @@ window.__ModuleLoader__.load({
 			"diagram.hide": "收起流程图",
 			"diagram.loading": "图表加载中…",
 			"diagram.error": "图表渲染失败",
+			"crash.title": "问卷渲染出错",
+			"crash.body": "渲染这份问卷时出了问题；对话输入区不受影响。可点击重试，或让模型重新发起问卷。",
+			"crash.retry": "重试渲染",
 			"custom.placeholder": "输入你的答案",
 			"action.start": "开始",
 			"action.start.hint": "开始逐题作答——随时可以返回上一题或跳过。",
@@ -230,6 +233,9 @@ window.__ModuleLoader__.load({
 			"diagram.hide": "Hide diagram",
 			"diagram.loading": "Loading diagram…",
 			"diagram.error": "Diagram failed to render",
+			"crash.title": "Survey render error",
+			"crash.body": "Something went wrong rendering this survey; the conversation composer is unaffected. Retry, or ask the model to re-issue the survey.",
+			"crash.retry": "Retry render",
 			"custom.placeholder": "Type your answer",
 			"action.start": "Start",
 			"action.start.hint": "Begin the question-by-question walk — you can go back or skip anytime.",
@@ -283,6 +289,35 @@ window.__ModuleLoader__.load({
 		}
 		function clearDraftState(surveyId) {
 			try { window.localStorage.removeItem(DRAFT_PREFIX + surveyId) } catch { /* best-effort */ }
+		}
+		const RECOVERY_PREFIX = "dsh-rich-questions/recovery/";
+		/**
+		* Spec identity for recovery: entry + question ids + prompt prefixes.
+		* A re-ask (fresh surveyId) over the same tree hashes identically, so
+		* banked answers survive cancel, crash, and re-issue.
+		*/
+		function specHash(spec) {
+			const questions = spec?.questions;
+			if (questions === null || typeof questions !== "object") return String(spec?.entry ?? "");
+			const parts = [String(spec?.entry ?? "")];
+			for (const id of Object.keys(questions).sort()) {
+				const node = questions[id];
+				const prompt = node !== null && typeof node === "object" && typeof node.prompt === "string" ? node.prompt : "";
+				parts.push(id + ":" + prompt.slice(0, 120));
+			}
+			return parts.join("|");
+		}
+		function saveRecovery(hash, value) {
+			try { window.localStorage.setItem(RECOVERY_PREFIX + hash, JSON.stringify(value)) } catch { /* best-effort */ }
+		}
+		function loadRecovery(hash) {
+			try {
+				const raw = window.localStorage.getItem(RECOVERY_PREFIX + hash);
+				if (raw === null) return null;
+				const parsed = JSON.parse(raw);
+				if (parsed === null || typeof parsed !== "object") return null;
+				return parsed;
+			} catch { return null }
 		}
 		//#endregion
 		//#region lib/styles.css
@@ -353,6 +388,11 @@ a.rq-source:hover{text-decoration:underline}
 .rq-diagram{margin-top:8px;border:1px solid var(--dsw-alias-border-l2-darkmode-thin);background:var(--dsw-alias-markdown-code-block);border-radius:10px;max-height:240px;overflow:hidden;justify-content:center;align-items:center;padding:8px;display:flex}
 .rq-diagram svg{width:100%;height:auto;max-height:224px;display:block}
 .rq-diagramLoading,.rq-diagramError{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px}
+.rq-crash{margin:8px 0;padding:12px 14px;border:1px solid var(--dsw-alias-state-error-primary);border-radius:10px}
+.rq-crashTitle{font-weight:600;color:var(--dsw-alias-state-error-primary)}
+.rq-crashBody{margin-top:4px;font-size:12px;line-height:16px;color:var(--dsw-alias-label-secondary)}
+.rq-crashMsg{margin-top:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:15px;color:var(--dsw-alias-state-error-primary);word-break:break-word}
+.rq-crashRetry{margin-top:8px;padding:4px 12px;border:1px solid var(--dsw-alias-border-l2-darkmode-thin);border-radius:8px;background:transparent;color:inherit;font-size:12px;cursor:pointer}
 .rq-diagramError{color:var(--dsw-alias-state-error-primary)}
 .rq-customRow{cursor:text;border:none;border-top:1px solid var(--dsw-alias-border-l2-darkmode-thin);border-radius:0;align-items:center;gap:10px;padding:10px 16px;display:flex;transition:background-color 120ms ease}
 .rq-customRowActive{background:var(--dsw-alias-interactive-bg-hover)}
@@ -729,9 +769,13 @@ a.rq-source:hover{text-decoration:underline}
 			const [quickMode, setQuickMode] = (0, react.useState)(() => restored.quickMode);
 			const hasQuick = Array.isArray(spec.quick) && spec.quick.length > 0;
 
-			// Persist on every change (best-effort; tiny payloads).
+			// Persist on every change (best-effort; tiny payloads). The recovery
+			// snapshot is keyed by spec identity, so a re-ask with a fresh
+			// surveyId still finds this progress (banked answers above all).
 			(0, react.useEffect)(() => {
-				saveDraftState(survey.surveyId, { v: 1, drafts, cursor, quickMode, banked: [...bankedIds], savedAt: Date.now() });
+				const snapshot = { v: 1, drafts, banked: [...bankedIds], savedAt: Date.now() };
+				saveDraftState(survey.surveyId, { ...snapshot, cursor, quickMode });
+				saveRecovery(specHash(spec), snapshot);
 			}, [survey.surveyId, drafts, cursor, quickMode, bankedIds]);
 			// Adopt banked answers arriving later (another tab banked, or the
 			// SSE hello frame landed after mount): they override local drafts.
@@ -1144,10 +1188,47 @@ a.rq-source:hover{text-decoration:underline}
 				})
 			});
 		}
+		/**
+		* Error boundary around SurveyFlow: a render crash inside the wizard
+		* (bad spec field, poisoned state) shows a visible error card with a
+		* Retry button instead of unmounting the conversation composer. The
+		* boundary is keyed by surveyId at the wrap site, so a new survey
+		* starts with a clean boundary.
+		*/
+		class SurveyBoundary extends react.Component {
+			constructor(props) {
+				super(props);
+				this.state = { error: null };
+				this.retry = () => this.setState({ error: null });
+			}
+			static getDerivedStateFromError(error) { return { error } }
+			componentDidCatch(error) { try { console.error("[rich-questions] survey render crashed:", error) } catch { /* console unavailable */ } }
+			render() {
+				if (this.state.error !== null) {
+					const t = this.props.t;
+					const message = this.state.error instanceof Error ? this.state.error.message : String(this.state.error);
+					return (0, react_jsx_runtime.jsxs)("div", { className: "rq-crash", children: [
+						(0, react_jsx_runtime.jsx)("div", { className: "rq-crashTitle", children: t("crash.title") }),
+						(0, react_jsx_runtime.jsx)("div", { className: "rq-crashBody", children: t("crash.body") }),
+						(0, react_jsx_runtime.jsx)("div", { className: "rq-crashMsg", children: message }),
+						(0, react_jsx_runtime.jsx)("button", { type: "button", className: "rq-crashRetry", onClick: this.retry, children: t("crash.retry") }),
+					] });
+				}
+				return this.props.children;
+			}
+		}
 		/** Composer occupant: renders the wizard for the selected session's pending survey. */
 		function SurveyComposer(props) {
+			// selectSurvey returns null (not undefined) when the viewed session
+			// has no pending survey — guard BOTH, or the key read crashes and
+			// React unmounts the whole composer seat.
+			if (props.matched == null) return null;
 			// key by surveyId so a follow-up survey in the same session remounts with fresh drafts
-			return props.matched === void 0 ? null : (0, react_jsx_runtime.jsx)(SurveyFlow, { survey: props.matched, t: props.t, key: props.matched.surveyId });
+			return (0, react_jsx_runtime.jsx)(SurveyBoundary, {
+				t: props.t,
+				key: props.matched.surveyId,
+				children: (0, react_jsx_runtime.jsx)(SurveyFlow, { survey: props.matched, t: props.t, key: props.matched.surveyId }),
+			});
 		}
 		//#endregion
 		//#region lib/index.js
