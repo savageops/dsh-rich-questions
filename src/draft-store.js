@@ -77,17 +77,21 @@ export function createDraftStore({ workspaceRoot, profileRoot, structureQuestion
 
   /** Auto-stub a skeleton so every question/option carries the required fields as TODO markers. */
   function stubIn(survey) {
+    // Models pass null for optional fields constantly (dogfood finding):
+    // strip nulls everywhere except `next`, where null means "branch ends".
+    const clean = (obj) => Object.fromEntries(Object.entries(obj ?? {}).filter(([, value]) => value !== null))
+    const cleanSurvey = clean(survey)
     const questions = {}
-    for (const [id, node] of Object.entries(survey.questions ?? {})) {
+    for (const [id, node] of Object.entries(cleanSurvey.questions ?? {})) {
       questions[id] = {
-        ...node,
+        ...clean(node),
         prompt: typeof node?.prompt === 'string' && node.prompt.trim() !== '' ? node.prompt : `TODO: prompt for ${id}`,
         ...(Array.isArray(node?.options)
-          ? { options: node.options.map((option, index) => ({ ...option, label: typeof option?.label === 'string' && option.label.trim() !== '' ? option.label : `TODO: label ${index + 1}` })) }
+          ? { options: node.options.map((option, index) => ({ ...clean(option), label: typeof option?.label === 'string' && option.label.trim() !== '' ? option.label : `TODO: label ${index + 1}` })) }
           : {}),
       }
     }
-    return { ...survey, questions }
+    return { ...cleanSurvey, questions }
   }
 
   return {
