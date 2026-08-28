@@ -111,7 +111,10 @@ export function validateSpec(raw, limits = {}) {
     }
   }
 
-  if (typeof raw !== 'object' || raw === null) return { ok: false, errors: ['survey must be an object'] }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    const got = Array.isArray(raw) ? 'an array' : raw === null ? 'null' : `a ${typeof raw}`
+    return { ok: false, errors: [`survey must be an object — got ${got}`] }
+  }
 
   const { title, intro, entry, questions } = raw
   if (typeof title === 'string' && title.trim() === '') fail('survey.title must be non-blank when present')
@@ -236,9 +239,13 @@ export function validateSpec(raw, limits = {}) {
           selected: Array.isArray(answer?.selected) ? answer.selected : [],
           custom: typeof answer?.custom === 'string' ? answer.custom : '',
         })
-        const reachable = new Set(computePath({ entry, questions }, quickAnswers))
+        const reachable = computePath({ entry, questions }, quickAnswers)
+        const reachableSet = new Set(reachable)
+        if (reachableSet.size === 0) {
+          fail(`${qWhere}.answers must include the entry question "${entry}" (with the option keys that start the branch) — without it no question is reachable and every answer in this template is dead weight`)
+        }
         for (const questionId of Object.keys(quickOption.answers)) {
-          if (!reachable.has(questionId)) fail(`${qWhere}.answers includes "${questionId}" which this template's own selections never reach — remove it or adjust the selected keys so the branch passes through it`)
+          if (!reachableSet.has(questionId)) fail(`${qWhere}.answers includes "${questionId}" which this template's own selections never reach — its branch reaches only: ${reachable.length > 0 ? reachable.join(', ') : '(nothing)'}. Remove it, or change the selected keys so the branch passes through "${questionId}"`)
         }
       })
     }
@@ -308,6 +315,62 @@ export function validateSpec(raw, limits = {}) {
   for (const id of ids) if (white.has(id) && visit(id) === true) return { ok: false, errors: ['survey graph contains a cycle (a question can follow itself through option branches)'] }
 
   return { ok: true, spec: { title, intro, entry, questions, ...(raw.quick !== undefined ? { quick: raw.quick } : {}) } }
+}
+
+/**
+ * Recover the survey spec from a possibly-degraded tool-call payload.
+ *
+ * The harness parses model tool-call arguments leniently: valid JSON arrives
+ * as a parsed object, malformed JSON arrives as the raw text string, and an
+ * empty payload arrives as {}. Models with small output budgets frequently
+ * truncate a large ask_survey payload mid-JSON — so a string here is usually
+ * a cut-off survey rather than a stringified one. Parse what can be parsed
+ * and otherwise say precisely that, so the model can shrink and retry
+ * instead of circling on the same opaque rejection.
+ *
+ * @param {unknown} args - the tool-call arguments object (or its degraded forms).
+ * @returns {{ok: true, args: object} | {ok: false, error: string}}
+ */
+export function resolveSurveyArgument(args) {
+  let payload = args
+  if (typeof payload === 'string') {
+    const parsed = tryParseJson(payload, 'The ask_survey arguments arrived as raw text')
+    if (!parsed.ok) return { ok: false, error: parsed.error }
+    payload = parsed.value
+  }
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+    const got = payload === null ? 'null' : Array.isArray(payload) ? 'an array' : `a ${typeof payload}`
+    return { ok: false, error: `the ask_survey arguments must be a JSON object, got ${got} — the emitted payload was likely truncated mid-JSON. Re-send a SMALLER survey: trim prompt/insight/description strings, drop the quick templates, or split the survey into two consecutive calls. Never resend the identical payload.` }
+  }
+  const survey = payload.survey
+  if (survey === undefined || survey === null) {
+    return { ok: false, error: 'ask_survey received no "survey" field — the model-side arguments were empty, malformed, or truncated before delivery (the harness forwards bad tool-call JSON as text and empty payloads as {}), so nothing could be validated. Re-send a SMALLER payload — trim prompt/insight/description strings and options, drop the quick templates — or split the survey into two consecutive calls. Never resend the identical payload.' }
+  }
+  if (typeof survey === 'string') {
+    const parsed = tryParseJson(survey, 'The "survey" field arrived as a JSON text string')
+    if (!parsed.ok) return { ok: false, error: parsed.error }
+    if (typeof parsed.value !== 'object' || parsed.value === null || Array.isArray(parsed.value)) {
+      return { ok: false, error: `the "survey" text parsed but is not a JSON object — got ${Array.isArray(parsed.value) ? 'an array' : `a ${typeof parsed.value}`}; re-send the survey as a proper object` }
+    }
+    return { ok: true, args: { ...payload, survey: parsed.value } }
+  }
+  if (typeof survey !== 'object' || Array.isArray(survey)) {
+    return { ok: false, error: `"survey" must be an object — got ${Array.isArray(survey) ? 'an array' : `a ${typeof survey}`}` }
+  }
+  return { ok: true, args: payload }
+}
+
+/** JSON.parse with the syntax error translated into a truncation-aware diagnostic. */
+function tryParseJson(text, where) {
+  try {
+    return { ok: true, value: JSON.parse(text) }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return {
+      ok: false,
+      error: `${where}, but the text failed to parse as JSON (${message}) — the signature of a payload cut off by the model's output-token limit. Re-send a SMALLER survey: trim prompt/insight/description strings and options, drop the quick templates, or split the survey into two consecutive calls.`,
+    }
+  }
 }
 
 /**

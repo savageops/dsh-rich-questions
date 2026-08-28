@@ -31,6 +31,9 @@
   "engines": {
     "node": ">=20"
   },
+  "scripts": {
+    "test": "node --test \"tests/**/*.spec.js\""
+  },
   "type": "module",
   "main": "src/host.js",
   "exports": {

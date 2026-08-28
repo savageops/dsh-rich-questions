@@ -134,6 +134,18 @@ One spec, every capability:
 
 **Validation is self-repairing.** Every rule is checked host-side at authoring time: `entry` exists, every `next` names a real question (question-level `null` = no follow-up), no cycles, option keys unique, quick templates reference only reachable questions with real option keys, every option-bearing question carries **at least 5 options** (keys a–e, aim 5–8 — genuinely distinct stances; the free-text row is separate and uncounted), size caps hold (150 questions / 40 options / 1500-char insights / 1200-char diagrams / 8 sources / 6 templates / 500-char justifications). Rejected specs get the exact offending spot, the **nearest defined id** for dangling references, and the **full id roster** — one retry fixes it.
 
+### When the call fails: "survey must be an object"
+
+The harness parses tool-call arguments leniently: valid JSON arrives as a parsed object, **malformed JSON arrives as the raw text string**, and an empty payload arrives as `{}`. A model with a small output budget (a local 27B, a heavily quantized build) can truncate a large `ask_survey` payload mid-JSON — the spec never arrives as an object, and older plugin builds could only answer `survey must be an object`, which reads as "fix the spec" and invites an identical, doomed retry.
+
+The tool now recovers what it can and otherwise names the real cause:
+
+- A `survey` field that is itself a JSON **string** is parsed and validated normally.
+- Arguments that arrive as raw **text** are parsed whole when they are valid JSON.
+- Anything else gets a diagnostic with the JSON syntax error and the fix: **re-send a smaller payload** (trim `insight`/`detail` strings, cut options to five, drop the quick templates) or **split the survey into two consecutive calls** — never resend the identical payload, because the failure was size, not content.
+
+Quick-template reachability errors now also list the path the template's selections actually reach (`reaches only: q1, q2a, q3`), so a wrong fork is a one-line fix instead of a guess.
+
 ## Result shapes
 
 Completed (manual walk, quick template, or a mix — indistinguishable):
