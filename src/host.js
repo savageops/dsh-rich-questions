@@ -242,8 +242,13 @@ class SurveyHostService {
     this.#emit({ type: 'survey/resolved', surveyId, sessionId: entry.sessionId, ...result })
     // Every non-cancel outcome resolves the tool call with an actionable
     // result the model reads and acts on next turn; only an explicit cancel
-    // aborts the tool call as an error.
-    if (result.outcome === 'cancelled') entry.reject(new SurveyError('the user cancelled the survey', 'SURVEY_CANCELLED'))
+    // aborts the tool call as an error. A TTL expiry settles with
+    // stale: true — say THAT, not "user cancelled", or the operator reads a
+    // reaping as their own action.
+    if (result.outcome === 'cancelled') {
+      if (result.stale === true) entry.reject(new SurveyError(`the survey expired unanswered after ${Math.round(SURVEY_TTL_MS / 60_000)} minutes (TTL sweep — nobody cancelled it; the wizard disappears on expiry). Re-issue ask_survey when the user is back at the keyboard`, 'SURVEY_EXPIRED'))
+      else entry.reject(new SurveyError('the user cancelled the survey', 'SURVEY_CANCELLED'))
+    }
     else entry.resolve(result)
     return { ok: true, ...result }
   }
