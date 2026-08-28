@@ -153,7 +153,7 @@ For big, research-grounded surveys, one giant `ask_survey` payload is the wrong 
 ```
 survey_draft_set op=begin      lock a full-frame skeleton (ids, ≥5 option keys, branch wiring; prompts/labels may be "TODO:" stubs)
   ↕  research (codebase / web / 9–12 competitors / docs) with your own tools
-survey_draft_set op=patch      flesh out ≤3 questions per call — prose only
+survey_draft_set op=patch      flesh out ≤3 questions per call — prose only; the same op sets draft-level intro and quick (templates authored LAST, over finished questions, coverage-checked immediately)
 survey_draft_get               the required-field checklist (per option: label, description, insight, ≥1 source)
 survey_draft_launch            refuses any TODO:, then starts the wizard; reroll/push/discuss REOPEN the draft
 ```

@@ -93,7 +93,10 @@ export function createDraftStore({ workspaceRoot, profileRoot, structureQuestion
   return {
     /** Begin a draft: full-frame skeleton (ids, option keys+labels or stubs, branch wiring), validated structurally. */
     async begin({ conversationId, title, survey }) {
-      const struct = checkStructure(stubIn(survey ?? {}))
+      // One title, one truth: the survey's own title defaults to the draft
+      // title so the card and the launched wizard never disagree.
+      const titled = { ...survey, ...(typeof survey?.title !== 'string' || survey.title.trim() === '' ? { title: String(title ?? 'Draft survey') } : {}) }
+      const struct = checkStructure(stubIn(titled))
       if (!struct.ok) return struct
       const base = slugifyTitle(title)
       const manifest = await readManifest()
@@ -120,14 +123,19 @@ export function createDraftStore({ workspaceRoot, profileRoot, structureQuestion
 
     /**
      * Content patch: merge up to 3 questions' prose fields (prompt, header,
-     * detail, multiSelect, allowCustom, skippable, options content). Branch
+     * detail, multiSelect, allowCustom, skippable, options content) and/or
+     * draft-level fields — intro (markdown first page) and quick (the up-to-6
+     * one-click templates, authored last over finished questions; the same
+     * validateSpec run checks the two-way coverage rule immediately). Branch
      * wiring (`next`, question- or option-level) is structural and belongs to
      * the structure op — it is ignored here and reported.
      */
-    async patch({ slug, questions }) {
+    async patch({ slug, questions, intro, quick }) {
       const entries = Object.entries(questions ?? {})
-      if (entries.length === 0) return { ok: false, error: 'patch carries no questions' }
+      if (entries.length === 0 && intro === undefined && quick === undefined) return { ok: false, error: 'patch carries nothing — provide questions, intro, and/or quick' }
       if (entries.length > 3) return { ok: false, error: `patch carries ${entries.length} questions — at most 3 per call (keep each payload small)` }
+      if (intro !== undefined && typeof intro !== 'string') return { ok: false, error: 'intro must be a string (markdown first page)' }
+      if (quick !== undefined && !Array.isArray(quick)) return { ok: false, error: 'quick must be an array of template objects (same shape as ask_survey quick)' }
       const draft = await readDraft(slug)
       const ignored = []
       for (const [id, patchNode] of entries) {
@@ -148,6 +156,8 @@ export function createDraftStore({ workspaceRoot, profileRoot, structureQuestion
           if (patchNode[field] !== undefined) node[field] = patchNode[field]
         }
       }
+      if (intro !== undefined) draft.survey.intro = intro
+      if (quick !== undefined) draft.survey.quick = quick
       const struct = checkStructure(draft.survey)
       if (!struct.ok) return { ok: false, error: `${struct.error} (patch rolled back nothing: fix the reported fields and re-send)` }
       draft.survey = struct.spec

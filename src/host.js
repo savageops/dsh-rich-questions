@@ -629,17 +629,19 @@ function draftToolDefinitions(ctx, service, structureQuestionCap) {
   })
   const setTool = {
     name: 'survey_draft_set',
-    description: 'Builder write. op=begin: lock a skeleton {title, survey:{entry, questions}} — ids, >=5 option keys per option-bearing question (labels/prompts may be "TODO:" stubs), branch wiring; validated on the spot. op=patch: flesh out at most 3 questions per call with prose only (prompt/header/detail/multiSelect/allowCustom/skippable/options label+description+insight+sources — option "next" fields are structural and ignored). op=structure: replace the whole graph (allowed while under the question cap; bumps revision). op=discard: retire the active draft (file remains as reference). Drafts are persistent files; one active draft per conversation; old drafts remain.',
+    description: 'Builder write. op=begin: lock a skeleton {title, survey:{entry, questions}} — ids, >=5 option keys per option-bearing question (labels/prompts may be "TODO:" stubs), branch wiring; validated on the spot; the draft title becomes the survey title unless survey.title is set. op=patch: flesh out at most 3 questions per call with prose only (prompt/header/detail/multiSelect/allowCustom/skippable/options label+description+insight+sources — option "next" fields are structural and ignored), and/or set draft-level fields: intro (markdown first page) and quick (the up-to-6 one-click templates, authored LAST over finished questions — validated immediately incl. the two-way coverage rule). op=structure: replace the whole graph (allowed while under the question cap; bumps revision). op=discard: retire the active draft (file remains as reference). Drafts are persistent files; one active draft per conversation; old drafts remain.',
     parameters: {
       type: 'object',
       required: ['op'],
       additionalProperties: false,
       properties: {
         op: { type: 'string', enum: ['begin', 'patch', 'structure', 'discard'], description: 'Lifecycle operation.' },
-        title: { type: 'string', description: 'op=begin: survey title; seeds the draft slug.' },
+        title: { type: 'string', description: 'op=begin: survey title; seeds the draft slug and defaults the survey title.' },
         survey: { type: 'object', description: 'op=begin/structure: the survey skeleton {title?, intro?, entry, questions} — same shape ask_survey takes; prompts/labels may be "TODO:" stubs, structure must validate.' },
         slug: { type: 'string', description: 'op=patch/structure/discard: target draft; omit to use the conversation active draft.' },
         questions: { type: 'object', description: 'op=patch: map of question id -> content patch {prompt?, header?, detail?, multiSelect?, allowCustom?, skippable?, options?} (options replaced wholesale when present).' },
+        intro: { type: 'string', description: 'op=patch: set the survey intro (markdown first page).' },
+        quick: { type: 'array', maxItems: 6, items: { type: 'object' }, description: 'op=patch: replace the quick templates — same shape as ask_survey quick [{key, label, description?, insight?, recommended?, answers: {qid: {selected}}}]. Author them last, over finished questions.' },
       },
     },
     async execute(args, exec) {
@@ -658,7 +660,7 @@ function draftToolDefinitions(ctx, service, structureQuestionCap) {
         outcome = await store.begin({ conversationId, title: typeof args.title === 'string' && args.title.trim() !== '' ? args.title : 'Draft survey', survey: args.survey })
       } else if (args.op === 'patch') {
         const slug = await resolveSlug()
-        outcome = await store.patch({ slug, questions: args.questions })
+        outcome = await store.patch({ slug, questions: args.questions, intro: args.intro, quick: args.quick })
       } else if (args.op === 'structure') {
         const slug = await resolveSlug()
         if (typeof args.survey !== 'object' || args.survey === null) throw new SurveyError('survey_draft_set op=structure requires survey {entry, questions}', 'SURVEY_DRAFT_BAD_OP')
