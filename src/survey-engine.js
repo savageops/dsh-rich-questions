@@ -364,6 +364,36 @@ export function draftCompleteness(spec) {
 }
 
 /**
+ * Grounding gaps for a builder draft — the operator's grounding bar. Per
+ * question: every option must cite at least one source, and (unless
+ * skipComparison, the 'internal' escape for surveys with no competitors)
+ * at least one option must cite a comparison target that points where it
+ * lives — a file path or URL. A citation is a non-blank string; path/URL
+ * detection is mechanical (a path separator or ://).
+ *
+ * @param {object} spec - draft survey spec ({ entry, questions }).
+ * @param {{skipComparison?: boolean}} [options]
+ * @returns {{ready: boolean, perQuestion: Array<{id: string, missing?: string[]}>}}
+ */
+export function groundingGaps(spec, { skipComparison = false } = {}) {
+  const perQuestion = []
+  for (const [id, node] of Object.entries(spec?.questions ?? {})) {
+    const missing = []
+    const options = Array.isArray(node?.options) ? node.options : []
+    let comparison = false
+    options.forEach((option, index) => {
+      const sources = Array.isArray(option?.sources) ? option.sources.filter((source) => typeof source === 'string' && source.trim() !== '') : []
+      if (sources.length === 0) missing.push(`options[${index}].sources`)
+      if (!comparison && sources.some((source) => /[\\/]/.test(source) || /:\/\//.test(source))) comparison = true
+    })
+    if (!skipComparison && options.length > 0 && !comparison) missing.push('comparison: no option cites a file path or URL — name where the comparison target lives')
+    if (missing.length > 0) perQuestion.push({ id, missing })
+    else perQuestion.push({ id })
+  }
+  return { ready: perQuestion.every((entry) => entry.missing === undefined), perQuestion }
+}
+
+/**
  * Recover the survey spec from a possibly-degraded tool-call payload.
  *
  * The harness parses model tool-call arguments leniently: valid JSON arrives

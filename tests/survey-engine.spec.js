@@ -7,7 +7,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { computePath, draftCompleteness, isStub, resolveSurveyArgument, validateSpec } from '../src/survey-engine.js'
+import { computePath, draftCompleteness, groundingGaps, isStub, resolveSurveyArgument, validateSpec } from '../src/survey-engine.js'
 
 const option = (key, extra = {}) => ({ key, label: `Option ${key}`, ...extra })
 const fiveOptions = (extra = {}) => ['a', 'b', 'c', 'd', 'e'].map((key) => option(key, { ...extra }))
@@ -182,4 +182,59 @@ test('draftCompleteness lists every missing required field per question', () => 
 
 test('draftCompleteness refuses an empty question map', () => {
   assert.equal(draftCompleteness({ entry: 'q1', questions: {} }).ready, false)
+})
+
+test('groundingGaps passes when an option cites a comparison target where it lives', () => {
+  const spec = {
+    entry: 'q1',
+    questions: {
+      q1: {
+        prompt: 'P?',
+        options: [
+          { key: 'a', label: 'L', description: 'd', insight: 'i', sources: ['settled record 681238b8'] },
+          { key: 'b', label: 'L', description: 'd', insight: 'i', sources: ['src/draft-store.js'] },
+        ],
+      },
+    },
+  }
+  assert.equal(groundingGaps(spec).ready, true)
+})
+
+test('groundingGaps demands a path-or-URL citation for the comparison half', () => {
+  const spec = {
+    entry: 'q1',
+    questions: {
+      q1: {
+        prompt: 'P?',
+        options: [
+          { key: 'a', label: 'L', description: 'd', insight: 'i', sources: ['competitor X', 'https://example.com/a'] },
+        ],
+      },
+    },
+  }
+  assert.equal(groundingGaps(spec).ready, true, 'a URL counts as a comparison citation')
+  const without = groundingGaps({ entry: 'q1', questions: { q1: { prompt: 'P?', options: [{ key: 'a', label: 'L', description: 'd', insight: 'i', sources: ['competitor X only'] }] } } })
+  assert.equal(without.ready, false)
+  assert.match(without.perQuestion[0].missing[0], /comparison: no option cites a file path or URL/)
+})
+
+test('groundingGaps internal mode skips the comparison half but keeps sources', () => {
+  const spec = {
+    entry: 'q1',
+    questions: {
+      q1: {
+        prompt: 'P?',
+        options: [{ key: 'a', label: 'L', description: 'd', insight: 'i', sources: ['internal note'] }],
+      },
+    },
+  }
+  assert.equal(groundingGaps(spec).ready, false, 'comparison fails under standard mode')
+  assert.equal(groundingGaps(spec, { skipComparison: true }).ready, true, 'internal mode skips only the comparison half')
+})
+
+test('groundingGaps still demands sources in internal mode', () => {
+  const spec = { entry: 'q1', questions: { q1: { prompt: 'P?', options: [{ key: 'a', label: 'L', description: 'd', insight: 'i' }] } } }
+  const report = groundingGaps(spec, { skipComparison: true })
+  assert.equal(report.ready, false)
+  assert.match(report.perQuestion[0].missing[0], /sources/)
 })

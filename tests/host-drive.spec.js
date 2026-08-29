@@ -52,7 +52,7 @@ assert.equal(begun.slug, 'drive-test')
 assert.equal(begun.completeness.ready, false)
 assert.ok(frames.some((chunk) => chunk.includes('draft/updated') && chunk.includes('drive-test')), 'begin did not emit a draft frame')
 
-const patched = await byName.get('survey_draft_set').execute({ op: 'patch', questions: { q1: { prompt: 'Pick?', options: fiveKeys.map((key) => ({ key, label: `L${key}`, description: 'd', insight: 'i', sources: ['s'] })) } } }, exec)
+const patched = await byName.get('survey_draft_set').execute({ op: 'patch', questions: { q1: { prompt: 'Pick?', options: fiveKeys.map((key) => ({ key, label: `L${key}`, description: 'd', insight: 'i', sources: ['src/draft-store.js'] })) } } }, exec)
 assert.equal(patched.completeness.ready, true)
 assert.equal(patched.revision, 0)
 
@@ -68,7 +68,7 @@ await assert.rejects(
   'launch must refuse a gapped draft with the checklist',
 )
 
-const structured = await byName.get('survey_draft_set').execute({ op: 'structure', survey: { entry: 'q1', questions: { q1: { prompt: 'P?', options: fiveKeys.map((key) => ({ key, label: `L${key}`, description: 'd', insight: 'i', sources: ['s'] })) } } } }, exec)
+const structured = await byName.get('survey_draft_set').execute({ op: 'structure', survey: { entry: 'q1', questions: { q1: { prompt: 'P?', options: fiveKeys.map((key) => ({ key, label: `L${key}`, description: 'd', insight: 'i', sources: ['src/draft-store.js'] })) } } } }, exec)
 assert.equal(structured.revision, 1)
 
 const discarded = await byName.get('survey_draft_set').execute({ op: 'discard' }, exec)
@@ -169,5 +169,28 @@ const manifest = JSON.parse(await readFile(join(process.env.DSH_RICH_QUESTIONS_H
 assert.equal(manifest.drafts['drive-test'].status, 'reopened', 'reroll must reopen the draft in the manifest')
 assert.ok(frames.some((chunk) => chunk.includes('"status":"reopened"')), 'reopen did not emit its frame')
 
+// Grounding bar: a complete draft whose citations never point where they
+// live (no path/URL) must refuse under standard mode and pass under
+// grounding: 'internal'.
+const shallowSkeleton = () => ({
+  entry: 'q1',
+  questions: { q1: { prompt: 'P?', options: fiveKeys.map((key) => ({ key, label: `L${key}`, description: 'd', insight: 'i', sources: ['competitor X only'] })) } },
+})
+await byName.get('survey_draft_set').execute({ op: 'begin', title: 'Shallow', survey: shallowSkeleton() }, exec)
+await assert.rejects(
+  () => byName.get('survey_draft_launch').execute({}, exec),
+  (error) => error.code === 'SURVEY_DRAFT_UNGROUNDED' && /grounding bar/.test(error.message) && /comparison/.test(error.message),
+  'launch must refuse an ungrounded draft with the comparison diagnostic',
+)
+const internalBegun = await byName.get('survey_draft_set').execute({ op: 'begin', title: 'Shallow Internal', grounding: 'internal', survey: shallowSkeleton() }, exec)
+assert.equal(internalBegun.grounding, 'internal')
+const internalLaunch = byName.get('survey_draft_launch').execute({}, exec)
+internalLaunch.catch(() => {}) // settles below via the action route
+await new Promise((resolve) => setImmediate(resolve))
+const internalSurveyId = surveyIdFromFrames()
+assert.notEqual(internalSurveyId, undefined, 'internal launch did not reach the pending registry — the grounding gate must pass for internal drafts')
+await callAction({ kind: 'cancel', surveyId: internalSurveyId })
+
 console.log('host drive OK: 5 tools, begin/patch/get/launch-gate/structure/discard, quick+intro authoring, answer + settled record, records reader, reroll + reopen, SSE frames observed')
 for (const fn of closeHandlers) fn() // drain the heartbeat so the test process exits
+

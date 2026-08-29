@@ -19,7 +19,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { computePath, draftCompleteness, resolveSurveyArgument, validateAnswers, validateSpec } from './survey-engine.js'
+import { computePath, draftCompleteness, groundingGaps, resolveSurveyArgument, validateAnswers, validateSpec } from './survey-engine.js'
 import { createDraftStore } from './draft-store.js'
 
 const API_PREFIX = '/api/rich-questions'
@@ -662,6 +662,7 @@ function draftToolDefinitions(ctx, service, structureQuestionCap) {
     title: result.draft.title,
     status: result.draft.status,
     revision: result.draft.revision,
+    grounding: result.draft.grounding ?? 'standard',
     active: true,
     file: result.file,
     completeness: {
@@ -681,6 +682,7 @@ function draftToolDefinitions(ctx, service, structureQuestionCap) {
       properties: {
         op: { type: 'string', enum: ['begin', 'patch', 'structure', 'discard'], description: 'Lifecycle operation.' },
         title: { type: 'string', description: 'op=begin: survey title; seeds the draft slug and defaults the survey title.' },
+        grounding: { type: 'string', enum: ['standard', 'internal'], description: 'op=begin: grounding-bar mode. standard (default): launch requires every option to cite a source and every question to cite a comparison target (file path or URL). internal: skips the comparison half for surveys with no competitors.' },
         survey: { type: 'object', description: 'op=begin/structure: the survey skeleton {title?, intro?, entry, questions} — same shape ask_survey takes; prompts/labels may be "TODO:" stubs, structure must validate.' },
         slug: { type: 'string', description: 'op=patch/structure/discard: target draft; omit to use the conversation active draft.' },
         questions: { type: 'object', description: 'op=patch: map of question id -> content patch {prompt?, header?, detail?, multiSelect?, allowCustom?, skippable?, options?}. Option patches MERGE per-field against the option at the same index — send only what changes, lists may be partial (untouched tail options survive); the structure op replaces options wholesale.' },
@@ -702,7 +704,7 @@ function draftToolDefinitions(ctx, service, structureQuestionCap) {
       let outcome
       if (args.op === 'begin') {
         if (typeof args.survey !== 'object' || args.survey === null) throw new SurveyError('survey_draft_set op=begin requires survey {entry, questions}', 'SURVEY_DRAFT_BAD_OP')
-        outcome = await store.begin({ conversationId, title: typeof args.title === 'string' && args.title.trim() !== '' ? args.title : 'Draft survey', survey: args.survey })
+        outcome = await store.begin({ conversationId, title: typeof args.title === 'string' && args.title.trim() !== '' ? args.title : 'Draft survey', survey: args.survey, grounding: args.grounding })
       } else if (args.op === 'patch') {
         const slug = await resolveSlug()
         outcome = await store.patch({ slug, questions: args.questions, intro: args.intro, quick: args.quick })
@@ -752,6 +754,11 @@ function draftToolDefinitions(ctx, service, structureQuestionCap) {
           totals: got.completeness.totals,
           incomplete: got.completeness.perQuestion.filter((entry) => entry.missing !== undefined),
         },
+        grounding: {
+          ready: got.grounding.ready,
+          mode: got.draft.grounding ?? 'standard',
+          gaps: got.grounding.perQuestion.filter((entry) => entry.missing !== undefined),
+        },
       }
     },
   }
@@ -778,6 +785,15 @@ function draftToolDefinitions(ctx, service, structureQuestionCap) {
       if (!completeness.ready) {
         const incomplete = completeness.perQuestion.filter((entry) => entry.missing !== undefined).map((entry) => `- ${entry.id}: ${entry.missing.join(', ')}`)
         throw new SurveyError(`survey_draft_launch blocked — required fields still missing. Fix them with survey_draft_set op=patch, then relaunch:\n${incomplete.join('\n')}`, 'SURVEY_DRAFT_INCOMPLETE')
+      }
+      // Grounding bar (operator decision, v3 roadmap): launch refuses drafts
+      // whose options lack sources, or that never cite a comparison target
+      // where it lives (file path / URL) — unless the draft began as
+      // 'internal' (no competitors to compare).
+      const grounding = groundingGaps(draft.survey, { skipComparison: draft.grounding === 'internal' })
+      if (!grounding.ready) {
+        const gaps = grounding.perQuestion.filter((entry) => entry.missing !== undefined).map((entry) => `- ${entry.id}: ${entry.missing.join(', ')}`)
+        throw new SurveyError(`survey_draft_launch blocked by the grounding bar — every option needs a source, and one option per question must cite where its comparison target lives (file path or URL). Fix with survey_draft_set op=patch, then relaunch:\n${gaps.join('\n')}`, 'SURVEY_DRAFT_UNGROUNDED')
       }
       const spec = struct.spec
       await store.markLaunched(draft.slug)

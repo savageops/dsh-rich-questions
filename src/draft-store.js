@@ -12,7 +12,7 @@
  */
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { draftCompleteness, validateSpec } from './survey-engine.js'
+import { draftCompleteness, groundingGaps, validateSpec } from './survey-engine.js'
 
 const DRAFT_SCHEMA_VERSION = 1
 
@@ -96,17 +96,21 @@ export function createDraftStore({ workspaceRoot, profileRoot, structureQuestion
 
   return {
     /** Begin a draft: full-frame skeleton (ids, option keys+labels or stubs, branch wiring), validated structurally. */
-    async begin({ conversationId, title, survey }) {
+    async begin({ conversationId, title, survey, grounding }) {
       // One title, one truth: the survey's own title defaults to the draft
       // title so the card and the launched wizard never disagree.
       const titled = { ...survey, ...(typeof survey?.title !== 'string' || survey.title.trim() === '' ? { title: String(title ?? 'Draft survey') } : {}) }
       const struct = checkStructure(stubIn(titled))
       if (!struct.ok) return struct
+      // Grounding bar mode: 'internal' skips the comparison half (surveys
+      // with no competitors); the source half always applies.
+      const groundingMode = grounding === 'internal' ? 'internal' : 'standard'
       const base = slugifyTitle(title)
       const manifest = await readManifest()
       let slug = base
       for (let n = 2; manifest.drafts[slug] !== undefined || slug === manifest.activeByConversation[conversationId]; n += 1) slug = `${base}-${n}`
       const now = Date.now()
+      const completeness = draftCompleteness(struct.spec)
       const draft = {
         v: DRAFT_SCHEMA_VERSION,
         slug,
@@ -116,13 +120,14 @@ export function createDraftStore({ workspaceRoot, profileRoot, structureQuestion
         createdAt: now,
         updatedAt: now,
         revision: 0,
+        grounding: groundingMode,
         survey: struct.spec,
       }
       await writeDraft(draft)
-      manifest.drafts[slug] = { status: draft.status, title: draft.title, conversationId, updatedAt: now, revision: 0, ready: draftCompleteness(draft.survey).ready, progress: draftCompleteness(draft.survey).totals }
+      manifest.drafts[slug] = { status: draft.status, title: draft.title, conversationId, updatedAt: now, revision: 0, ready: completeness.ready, progress: completeness.totals, grounding: groundingMode }
       manifest.activeByConversation[conversationId] = slug
       await writeManifest(manifest)
-      return { ok: true, draft, completeness: draftCompleteness(draft.survey), file: fileLabel(slug) }
+      return { ok: true, draft, completeness, file: fileLabel(slug) }
     },
 
     /**
@@ -241,7 +246,14 @@ export function createDraftStore({ workspaceRoot, profileRoot, structureQuestion
       if (target === undefined) return { ok: false, error: 'no draft yet — begin one with survey_draft_set op=begin' }
       try {
         const draft = await readDraft(target)
-        return { ok: true, draft, completeness: draftCompleteness(draft.survey), active: manifest.activeByConversation[conversationId] === draft.slug, file: fileLabel(draft.slug) }
+        return {
+          ok: true,
+          draft,
+          completeness: draftCompleteness(draft.survey),
+          grounding: groundingGaps(draft.survey, { skipComparison: draft.grounding === 'internal' }),
+          active: manifest.activeByConversation[conversationId] === draft.slug,
+          file: fileLabel(draft.slug),
+        }
       } catch (error) {
         return { ok: false, error: `draft "${target}" could not be read: ${error instanceof Error ? error.message : String(error)}` }
       }
