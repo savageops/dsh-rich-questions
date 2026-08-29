@@ -900,16 +900,17 @@ function recordsToolDefinition(ctx) {
           }))
           records.push({
             surveyId: raw.surveyId,
-            // Null (not dropped) for a hand-damaged record: the date is the
-            // staleness signal, so surface its absence instead of hiding it.
-            settledAt: Number.isFinite(raw.settledAt) ? new Date(raw.settledAt).toISOString() : null,
+            // 'undated' (never null — the output schema declares a string)
+            // for a hand-damaged record: the date is the staleness signal,
+            // so surface its absence instead of hiding the record.
+            settledAt: Number.isFinite(raw.settledAt) ? new Date(raw.settledAt).toISOString() : 'undated',
             outcome: raw.outcome,
             ...(typeof raw.title === 'string' ? { title: raw.title } : {}),
             answers,
           })
         } catch { /* one torn record must not blind the reader */ }
       }
-      records.sort((a, b) => (b.settledAt ?? '').localeCompare(a.settledAt ?? ''))
+      records.sort((a, b) => b.settledAt.localeCompare(a.settledAt))
       const matches = query === undefined
         ? records
         : records.filter((record) => {

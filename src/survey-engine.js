@@ -328,10 +328,20 @@ export function validateSpec(raw, limits = {}) {
  * to real newlines; one-line fields (labels, descriptions) get them
  * collapsed to spaces so nothing injects line breaks into single-line
  * rendering. Ids, keys, next wiring, and diagrams are untouched.
+ *
+ * Path safety: a lone escape converts only when the character AFTER it is
+ * not a letter or digit — corrupted prose is followed by markdown structure
+ * or whitespace (`\n\n**B:**`, `\n- item`, end of text), while a Windows
+ * path segment (`E:\notes`, `src\runner`) puts a letter right after the
+ * backslash. The `\r\n` and `\n\n` PAIRS convert unconditionally: no real
+ * path shape contains backslash-escape pairs adjacent (and the pair's
+ * second member is followed by the next paragraph's letter, which the lone
+ * lookahead would otherwise shield).
  */
+const PROSE_ESCAPE = /\\r\\n|\\n\\n|\\n(?![A-Za-z0-9])|\\r(?![A-Za-z0-9])/g
 export function repairEscapedNewlines(text) {
   return typeof text === 'string' && text.includes('\\')
-    ? text.replace(/\\r\\n|\\n|\\r/g, '\n')
+    ? text.replace(PROSE_ESCAPE, '\n')
     : text
 }
 

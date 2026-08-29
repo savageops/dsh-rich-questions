@@ -26,8 +26,12 @@ Every rule below is shown applied to ONE real option (from this plugin's own v3.
 > **Rule: stance options, ≥5, never filler.**
 > Worked labels: *A reader tool the agent calls · Auto-injection at ask time · A memory header on every survey · A remembered user dial · Gate-time check only* — five positions a reasonable person could defend, each implying different work.
 
-> **Rule: the insight triple — Promise / Price / Present.**
-> Worked (abridged): *"**Promise** — no-re-asking enforced by construction, zero prompts required. **Price** — injection picks relevance heuristically; wrong context is worse than none. **Present** — `SurveyHostService.ask` (src/host.js) has no injection seam today; records land in `~/.dsh/rich-questions/surveys/` unread."* — what you get, what you pay, where things stand, with the concrete handle named inside the Present itself.
+> **Rule: insights are DEEP labeled ROWS — one specific, checkable point per row.** 3–5 markdown list rows; every row leads with a content label that carries meaning (Pattern / Proven at / Breaks when / Here now / Evidence — the label varies with what the option needs, never a fixed generic triple). Minimum per insight: one row names a real-world proven use (system/product/repo + what happened), one row states the tradeoff or break condition, one row gives the current-state handle (file path / number / record). A one-word-label row — "Proven: X" with no who or where — is as shallow as a paragraph; depth lives in the specifics.
+> Worked (the same v3.1 option, deep format):
+> *"- **Pattern:** ask-time memory injection — settled records are read at survey authoring, not at runtime.
+> - **Proven at:** the context plugins resolve per-session data through provide contributions this way in production; `survey_records` (v0.3.0) already reads the settled store.
+> - **Breaks when:** records outnumber relevance — fifty settled surveys later, injection needs ranking, not raw replay.
+> - **Here now:** `SurveyHostService.ask` (src/host.js) has no injection seam; 2 settled records sit in `~/.dsh/rich-questions/surveys/` unread."* — four rows, four checkable claims, the proven use named with its evidence.
 
 > **Rule: sources on every option.**
 > Worked: `["SurveyHostService.ask — the ask-time seam", "~/.dsh/rich-questions/surveys/ — record contents"]` — file-level or product-level citations, not bare URLs.

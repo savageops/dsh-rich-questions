@@ -140,8 +140,8 @@ test('validateSpec repairs literal escape sequences in prose (the flattened-intr
     entry: 'q1',
     questions: {
       q1: {
-        prompt: 'One line\\nplus a second',
-        header: 'Scope\\nDelivery',
+        prompt: 'One line\\n\\nplus a second',
+        header: 'Scope\\n\\nDelivery',
         options: [
           { key: 'a', label: 'Stance one\\ncontinued', description: 'One sentence\\nspilled', insight: '**Promise** p\\n**Price** c\\n**Present** t', sources: ['s'] },
           { key: 'b', label: 'Plain', description: 'No escapes here', insight: 'Real newline\nkept as-is', sources: ['s'] },
@@ -156,18 +156,44 @@ test('validateSpec repairs literal escape sequences in prose (the flattened-intr
   const check = validateSpec(spec)
   assert.equal(check.ok, true)
   assert.equal(check.spec.intro, '**A:** first\n\n**B:** second')
-  assert.equal(check.spec.questions.q1.prompt, 'One line\nplus a second')
-  assert.equal(check.spec.questions.q1.header, 'Scope Delivery', 'one-line fields collapse, never carry newlines')
+  assert.equal(check.spec.questions.q1.prompt, 'One line\n\nplus a second', 'the pair converts unconditionally (no path shape contains it)')
+  assert.equal(check.spec.questions.q1.header, 'Scope  Delivery', 'the \\r\\n-pair-class escapes collapse in one-line fields (pair converts unconditionally, then newlines become spaces)')
   const [a, b] = check.spec.questions.q1.options
-  assert.equal(a.label, 'Stance one continued')
-  assert.equal(a.description, 'One sentence spilled')
+  assert.equal(a.label, 'Stance one\\ncontinued', 'a letter follows the escape — path-safety keeps the literal (a visible literal beats a corrupted path)')
+  assert.equal(a.description, 'One sentence\\nspilled', 'same lookahead rule for one-line fields')
   assert.equal(a.insight, '**Promise** p\n**Price** c\n**Present** t')
   assert.equal(b.insight, 'Real newline\nkept as-is', 'real newlines pass through untouched')
-  assert.equal(check.spec.quick[0].label, 'Quick stance')
+  assert.equal(check.spec.quick[0].label, 'Quick\\nstance', 'letter-followed escape stays literal in quick labels too')
   assert.equal(check.spec.quick[0].insight, 'p\nc')
   // Ids and branch wiring are untouched by the repair.
   assert.equal(check.spec.entry, 'q1')
   assert.equal(check.spec.questions.q1.options[0].key, 'a')
+})
+
+test('escape repair never corrupts Windows paths (path-safety lookahead)', () => {
+  // A path segment puts a letter right after the backslash: keep it intact.
+  const pathy = validateSpec({
+    entry: 'q1',
+    intro: 'See E:\\notes\\v3 and src\\runner\\lib for the plan.',
+    questions: { q1: { prompt: 'Where does E:\\nodes\\x live?', options: ['a', 'b', 'c', 'd', 'e'].map((key) => ({ key, label: key, description: 'd', insight: 'i', sources: ['s'] })) } },
+  })
+  assert.equal(pathy.ok, true)
+  assert.equal(pathy.spec.intro, 'See E:\\notes\\v3 and src\\runner\\lib for the plan.')
+  assert.equal(pathy.spec.questions.q1.prompt, 'Where does E:\\nodes\\x live?')
+  // The \r\n pair is not a path shape — converts unconditionally, even before a letter.
+  const paired = validateSpec({
+    entry: 'q1',
+    intro: 'first\\r\\nsecond line',
+    questions: { q1: { prompt: 'p', options: ['a', 'b', 'c', 'd', 'e'].map((key) => ({ key, label: key, description: 'd', insight: 'i', sources: ['s'] })) } },
+  })
+  assert.equal(paired.spec.intro, 'first\nsecond line', 'the \\r\\n pair converts and normalizes to a single newline')
+  // Trailing and structure-following escapes still convert.
+  const trailing = validateSpec({
+    entry: 'q1',
+    intro: 'one\\n\\n**Two:** body\\n',
+    questions: { q1: { prompt: 'p', options: ['a', 'b', 'c', 'd', 'e'].map((key) => ({ key, label: key, description: 'd', insight: 'i', sources: ['s'] })) } },
+  })
+  assert.equal(trailing.spec.intro, 'one\n\n**Two:** body\n')
 })
 
 test('draftCompleteness reports ready for a fully fleshed draft', () => {
