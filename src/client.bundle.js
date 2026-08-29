@@ -71,16 +71,27 @@ window.__ModuleLoader__.load({
 		 * survey settles (answered / cancelled / superseded) so a fresh ask
 		 * always starts expanded. */
 		const MINIMIZED_PREFIX = "dsh-rich-questions/minimized/";
+		// In-memory mirror of the minimized flags: localStorage stays the
+		// durable layer (survives reloads), but the mirror keeps flags working
+		// when storage is unavailable (private browsing, sandboxed harnesses)
+		// instead of silently no-oping behind the try/catch.
+		const minimizedInMemory = new Set();
 		function isSurveyMinimized(surveyId) {
 			if (typeof surveyId !== "string") return false;
-			try { return window.localStorage.getItem(MINIMIZED_PREFIX + surveyId) === "1" } catch { return false }
+			try {
+				if (window.localStorage.getItem(MINIMIZED_PREFIX + surveyId) === "1") return true;
+				if (window.localStorage.getItem(MINIMIZED_PREFIX + surveyId) === "0") minimizedInMemory.delete(surveyId);
+			} catch { /* storage unavailable — the memory mirror is the authority */ }
+			return minimizedInMemory.has(surveyId);
 		}
 		function setSurveyMinimized(surveyId, value) {
 			if (typeof surveyId !== "string") return;
+			if (value === true) minimizedInMemory.add(surveyId);
+			else minimizedInMemory.delete(surveyId);
 			try {
 				if (value === true) window.localStorage.setItem(MINIMIZED_PREFIX + surveyId, "1");
 				else window.localStorage.removeItem(MINIMIZED_PREFIX + surveyId);
-			} catch { /* best-effort */ }
+			} catch { /* best-effort durability; the memory mirror already updated */ }
 		}
 		/**
 		* Module-level survey store: sessionId -> { surveyId, spec, createdAt }.
@@ -249,6 +260,18 @@ window.__ModuleLoader__.load({
 				start,
 				/** Forget locally after a successful action (the resolved frame confirms). */
 				forget(sessionId) { if (bySession.delete(sessionId)) notify(); },
+				/**
+				 * Minimize the session's pending survey by session id, then
+				 * notify (mounted subscribers AND the election-refresh hook).
+				 * Automation/test seam over setSurveyMinimized, which keys by
+				 * surveyId.
+				 */
+				setMinimized(sessionId, value) {
+					const pending = bySession.get(sessionId);
+					if (pending === undefined) return;
+					setSurveyMinimized(pending.surveyId, value);
+					bump();
+				},
 				/** Minimize toggle: notify mounted subscribers AND the election-refresh hook. */
 				bump,
 				/** Apply-side subscription: minimize toggles bump the locale revision so slot outlets re-run chain election. */
@@ -333,8 +356,8 @@ window.__ModuleLoader__.load({
 			"nav.prev": "上一题",
 			"nav.cancel": "放弃问卷",
 			"nav.minimize": "收起问卷",
-			"nav.minimize.hint": "把问卷收起——聊天输入恢复原状；点输入区右上方的圆形按钮随时重新打开。",
-			"fab.open": "打开进行中的问卷"
+			"nav.minimize.hint": "把问卷收起——聊天输入恢复原状；用作曲下方坞栏里的圆形按钮随时重新打开。",
+			"nav.reopen": "打开进行中的问卷"
 		};
 		const en = {
 			"title.default": "Survey",
@@ -390,8 +413,8 @@ window.__ModuleLoader__.load({
 			"nav.prev": "Previous question",
 			"nav.cancel": "Dismiss the survey",
 			"nav.minimize": "Minimize survey",
-			"nav.minimize.hint": "Put the survey away — the chat input returns; reopen it from the round button above the composer.",
-			"fab.open": "Reopen the survey in progress"
+			"nav.minimize.hint": "Put the survey away — the chat input returns; reopen it from the round button in the dock below the composer.",
+			"nav.reopen": "Reopen the survey in progress"
 		};
 		//#endregion
 		//#region lib/draft-store.js
@@ -455,14 +478,12 @@ window.__ModuleLoader__.load({
    with the composer stack's own 6px rhythm, so the composer zone keeps its
    shape instead of collapsing into one orphan container. */
 .rq-claim{flex-direction:column;gap:6px;padding:6px 0 10px;display:flex}
-/* The reopen FAB: one round floating affordance while a survey is minimized.
-   Zero-height first row of the input dock; the button floats at the right
-   edge in the back-to-bottom lane (58px = 16px lane + 34px control + 8px
-   gap), attach-circle grammar (filled round, no border). */
-.rq-fabWrap{position:relative;height:0;flex:none}
-.rq-fab{position:absolute;right:0;bottom:calc(100% + 58px);width:34px;height:34px;border:none;border-radius:999px;background:var(--dsw-specific-selector);color:var(--dsw-alias-label-primary);display:grid;place-items:center;cursor:pointer;box-shadow:var(--dsw-shadow-lv2);z-index:8}
-.rq-fab:hover{background:var(--dsw-alias-interactive-bg-hover-solid)}
-.rq-fab:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px}
+/* The reopen pill: one round affordance while a survey is minimized.
+   Ambient dock row below the composer card; right-aligned, the
+   attach-circle grammar (filled round, no border). */
+.rq-reopener{margin:6px 0 0 auto;display:flex;width:34px;height:34px;align-items:center;justify-content:center;border:1px solid var(--dsw-alias-border-l2-darkmode-thin);border-radius:999px;background:var(--dsw-specific-input-major);color:var(--dsw-alias-label-primary);cursor:pointer;box-shadow:var(--dsw-shadow-lv2)}
+.rq-reopener:hover{background:var(--dsw-alias-interactive-bg-hover-solid)}
+.rq-reopener:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px}
 .rq-card{width:100%;max-width:var(--dsh-chat-content-width);border:1px solid var(--dsw-alias-border-l2-darkmode-thin);background:var(--dsw-specific-input-major);max-height:min(60vh,520px);box-shadow:var(--dsw-shadow-lv2);color:var(--dsw-alias-label-primary);--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2);--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2);border-radius:20px;flex-direction:column;padding:0;display:flex;overflow:hidden}
 .rq-card,.rq-card *{box-sizing:border-box}
 .rq-card,.rq-body,.rq-insight,.rq-source-list{scrollbar-width:none}
@@ -1497,32 +1518,25 @@ a.rq-source:hover{text-decoration:underline}
 			});
 		}
 		/**
-		* The reopen FAB (conversation.input.dock, first row): while a pending
-		* survey is MINIMIZED the composer is fully back to normal chat, and
-		* this one round floating affordance — right edge, above the
-		* back-to-bottom control, the attach-circle grammar — hands the
+		* The reopen pill (conversation.composer.dock, the ambient dock row
+		* below the composer card): while a pending survey is MINIMIZED the
+		* composer is fully back to normal chat, and this one affordance —
+		* round, right-aligned, the attach-circle grammar — hands the
 		* composer back to the wizard. Renders null whenever no survey is
 		* minimized, which is the overwhelming majority of the time.
 		*/
-		function SurveyFab({ sessionId, t }) {
+		function SurveyReopener({ sessionId, t }) {
 			(0, react.useSyncExternalStore)(surveyStore.subscribe, surveyStore.getVersion);
 			if (typeof sessionId !== "string") return null;
 			const pending = surveyStore.get(sessionId);
 			if (pending === undefined || isSurveyMinimized(pending.surveyId) !== true) return null;
-			return (0, react_jsx_runtime.jsx)("div", {
-				className: "rq-fabWrap",
-				children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
-					label: t("fab.open"),
-					side: "left",
-					delayMs: 300,
-					children: (0, react_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "rq-fab",
-						"aria-label": t("fab.open"),
-						onClick: () => { setSurveyMinimized(pending.surveyId, false); surveyStore.bump(); },
-						children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconQuestionOutline14, {})
-					})
-				})
+			return (0, react_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "rq-reopener",
+				"aria-label": t("nav.reopen"),
+				title: t("nav.reopen"),
+				onClick: () => { setSurveyMinimized(pending.surveyId, false); surveyStore.bump(); },
+				children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconQuestionOutline14, {})
 			});
 		}
 		//#endregion
@@ -1548,12 +1562,12 @@ a.rq-source:hover{text-decoration:underline}
 		}
 		const inject = ["slots", "locale"];
 		/**
-		* Client plugin body: locale dictionaries, the reopen FAB's dock row,
+		* Client plugin body: locale dictionaries, the reopen pill's ambient dock row,
 		* and the composer-seat registration for the conversation composer
 		* chain (the same seat the built-in question composer occupies; the two
 		* never claim one request — this one claims its own pending surveys and
-		* its builder drafts). The entry's children declaration authorizes the
-		* claim to re-render the ambient input dock above the card.
+		* its builder drafts). Both parent slots are declared by the core
+		* conversation registration; this plugin contributes entries only.
 		*/
 		function apply(ctx) {
 			// Hydrate at activation: SSE + reconciliation poll against the
@@ -1577,24 +1591,27 @@ a.rq-source:hover{text-decoration:underline}
 					disposeDicts = ctx.locale.register(NS, { zh, en });
 				} catch { /* unload raced the toggle; the base effect still disposes the latest handle */ }
 			}), "rich-questions: minimize re-election refresh");
-			// The reopen FAB first (dock row -1, zero-height anchor): also
-			// keeps the composer registration LAST so single-registration
-			// harnesses capture the chain entry.
-			ctx.slots.inject("conversation.input.dock", () => ctx.slots.register({
-				name: "conversation.input.dock",
-				id: "survey-fab",
-				order: -1,
-				locale: NS
-			}, SurveyFab));
+			// The reopen pill (ambient dock row below the composer card) keeps
+			// the composer registration LAST so single-registration harnesses
+			// capture the chain entry.
+			ctx.slots.inject("conversation.composer.dock", () => ctx.slots.register({
+				name: "conversation.composer.dock",
+				id: "survey-reopener",
+				order: 5,
+				locale: NS,
+				inject: (zone) => ({ sessionId: zone.session.sessionId })
+			}, SurveyReopener));
 			ctx.slots.inject("conversation.composer", () => ctx.slots.register({
 				name: "conversation.composer",
 				select: selectSurvey,
-				locale: NS,
-				children: { "conversation.input.dock": { kind: "list", scope: "session" } }
+				locale: NS
 			}, SurveyComposer));
 		}
 		exports.apply = apply;
 		exports.inject = inject;
+		// Automation/test seam: the survey store, so harnesses can drive
+		// minimize/claim flows without a DOM.
+		exports.__store = surveyStore;
 		return module.exports;
 	}
 });
