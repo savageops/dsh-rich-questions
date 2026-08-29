@@ -188,3 +188,18 @@ test('markLaunched records status without touching the active pointer', async ()
   const list = await store.list()
   assert.equal(list.manifest.activeByConversation['conv-1'], draft.slug)
 })
+
+test('begin tolerates null-valued optional fields (dogfood: intro: null)', async () => {
+  const { store } = await freshStore()
+  const survey = {
+    entry: 'q1',
+    title: 'Null Fields',
+    intro: null,
+    questions: { q1: { header: null, prompt: null, options: fiveKeys.map((key) => ({ key, description: null, insight: null, sources: null })) } },
+  }
+  const begun = await store.begin({ conversationId: 'conv-1', title: 'Null Fields', survey })
+  assert.equal(begun.ok, true, `begin rejected null-valued fields: ${begun.error ?? ''}`)
+  assert.equal(begun.draft.survey.intro, undefined, 'null intro must be stripped, not kept')
+  assert.equal(begun.draft.survey.questions.q1.header, undefined)
+  assert.equal(begun.draft.survey.questions.q1.options[0].description, undefined)
+})
