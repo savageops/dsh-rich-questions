@@ -131,6 +131,45 @@ test('isStub detects blank, absent, and TODO-marked fields', () => {
   assert.equal(isStub('A real prompt'), false)
 })
 
+test('validateSpec repairs literal escape sequences in prose (the flattened-intro corruption)', () => {
+  // Measured on this deployment: writer/tool boundaries delivered "\n" as
+  // backslash+n, flattening the intro and every insight into one run-on.
+  const spec = {
+    title: 'T',
+    intro: '**A:** first\\n\\n**B:** second',
+    entry: 'q1',
+    questions: {
+      q1: {
+        prompt: 'One line\\nplus a second',
+        header: 'Scope\\nDelivery',
+        options: [
+          { key: 'a', label: 'Stance one\\ncontinued', description: 'One sentence\\nspilled', insight: '**Promise** p\\n**Price** c\\n**Present** t', sources: ['s'] },
+          { key: 'b', label: 'Plain', description: 'No escapes here', insight: 'Real newline\nkept as-is', sources: ['s'] },
+          { key: 'c', label: 'Third', description: 'd', insight: 'i', sources: ['s'] },
+          { key: 'd', label: 'Fourth', description: 'd', insight: 'i', sources: ['s'] },
+          { key: 'e', label: 'Fifth', description: 'd', insight: 'i', sources: ['s'] },
+        ],
+      },
+    },
+    quick: [{ key: 'a', label: 'Quick\\nstance', description: 'd\\nmore', insight: 'p\\nc', answers: { q1: { selected: ['a'] } } }],
+  }
+  const check = validateSpec(spec)
+  assert.equal(check.ok, true)
+  assert.equal(check.spec.intro, '**A:** first\n\n**B:** second')
+  assert.equal(check.spec.questions.q1.prompt, 'One line\nplus a second')
+  assert.equal(check.spec.questions.q1.header, 'Scope Delivery', 'one-line fields collapse, never carry newlines')
+  const [a, b] = check.spec.questions.q1.options
+  assert.equal(a.label, 'Stance one continued')
+  assert.equal(a.description, 'One sentence spilled')
+  assert.equal(a.insight, '**Promise** p\n**Price** c\n**Present** t')
+  assert.equal(b.insight, 'Real newline\nkept as-is', 'real newlines pass through untouched')
+  assert.equal(check.spec.quick[0].label, 'Quick stance')
+  assert.equal(check.spec.quick[0].insight, 'p\nc')
+  // Ids and branch wiring are untouched by the repair.
+  assert.equal(check.spec.entry, 'q1')
+  assert.equal(check.spec.questions.q1.options[0].key, 'a')
+})
+
 test('draftCompleteness reports ready for a fully fleshed draft', () => {
   const spec = {
     entry: 'q1',

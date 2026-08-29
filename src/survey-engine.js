@@ -314,7 +314,73 @@ export function validateSpec(raw, limits = {}) {
   }
   for (const id of ids) if (white.has(id) && visit(id) === true) return { ok: false, errors: ['survey graph contains a cycle (a question can follow itself through option branches)'] }
 
-  return { ok: true, spec: { title, intro, entry, questions, ...(raw.quick !== undefined ? { quick: raw.quick } : {}) } }
+  return { ok: true, spec: repairedSpec({ title, intro, entry, questions, quick: raw.quick }) }
+}
+
+/**
+ * Repair literal escape sequences in prose. Some writer/tool boundaries
+ * deliver "\n" as TWO characters (backslash + n) instead of a real newline —
+ * measured on this deployment across sessions and writers: the survey intro
+ * and every option insight arrived flattened into one bold-clause run-on
+ * ("poorly formatted, no structure") even though the authored markdown had
+ * paragraph breaks. A literal \n in survey prose is never intentional, so
+ * block prose (intro, prompt, detail, insight) gets the sequences converted
+ * to real newlines; one-line fields (labels, descriptions) get them
+ * collapsed to spaces so nothing injects line breaks into single-line
+ * rendering. Ids, keys, next wiring, and diagrams are untouched.
+ */
+export function repairEscapedNewlines(text) {
+  return typeof text === 'string' && text.includes('\\')
+    ? text.replace(/\\r\\n|\\n|\\r/g, '\n')
+    : text
+}
+
+/** One-line variant: repair the escapes, then never carry a newline forward. */
+function repairOneLine(text) {
+  return repairEscapedNewlines(text).replace(/\r?\n/g, ' ')
+}
+
+/** The validated spec with prose fields escape-repaired (see repairEscapedNewlines). */
+function repairedSpec({ title, intro, entry, questions, quick }) {
+  const repairedQuestions = {}
+  for (const [id, node] of Object.entries(questions)) {
+    if (node === null || typeof node !== 'object') { repairedQuestions[id] = node; continue }
+    repairedQuestions[id] = {
+      ...node,
+      ...(typeof node.prompt === 'string' ? { prompt: repairEscapedNewlines(node.prompt) } : {}),
+      ...(typeof node.detail === 'string' ? { detail: repairEscapedNewlines(node.detail) } : {}),
+      ...(typeof node.header === 'string' ? { header: repairOneLine(node.header) } : {}),
+      ...(Array.isArray(node.options) ? {
+        options: node.options.map((option) => {
+          if (option === null || typeof option !== 'object') return option
+          return {
+            ...option,
+            ...(typeof option.label === 'string' ? { label: repairOneLine(option.label) } : {}),
+            ...(typeof option.description === 'string' ? { description: repairOneLine(option.description) } : {}),
+            ...(typeof option.insight === 'string' ? { insight: repairEscapedNewlines(option.insight) } : {}),
+          }
+        }),
+      } : {}),
+    }
+  }
+  const repairedQuick = Array.isArray(quick)
+    ? quick.map((template) => {
+      if (template === null || typeof template !== 'object') return template
+      return {
+        ...template,
+        ...(typeof template.label === 'string' ? { label: repairOneLine(template.label) } : {}),
+        ...(typeof template.description === 'string' ? { description: repairOneLine(template.description) } : {}),
+        ...(typeof template.insight === 'string' ? { insight: repairEscapedNewlines(template.insight) } : {}),
+      }
+    })
+    : quick
+  return {
+    ...(title !== undefined ? { title } : {}),
+    ...(intro !== undefined ? { intro: repairEscapedNewlines(intro) } : {}),
+    entry,
+    questions: repairedQuestions,
+    ...(repairedQuick !== undefined ? { quick: repairedQuick } : {}),
+  }
 }
 
 /** A draft stub: blank, absent, or the explicit `TODO:` marker begin() writes. */
