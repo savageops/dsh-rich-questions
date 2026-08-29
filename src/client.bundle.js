@@ -248,7 +248,8 @@ window.__ModuleLoader__.load({
 			"draft.missing": "个必填缺口",
 			"draft.revision": "结构版本",
 			"draft.dismiss": "隐藏草稿卡片",
-			"draft.hint": "正在按构建器流程构建这份问卷（调研 + 小步补全）；构建完成会自动切换为问卷向导。聊天输入不受影响。",
+			"draft.hint": "正在按构建器流程构建这份问卷（调研 + 小步补全）；构建完成会自动切换为问卷向导。",
+			"draft.show": "显示卡片",
 			"draft.status.building": "构建中",
 			"draft.status.launched": "已启动",
 			"draft.status.reopened": "已重开",
@@ -303,7 +304,8 @@ window.__ModuleLoader__.load({
 			"draft.missing": "required fields missing",
 			"draft.revision": "rev",
 			"draft.dismiss": "Hide draft card",
-			"draft.hint": "This survey is being built through the builder lifecycle (research + small patches); the wizard takes over the composer automatically on launch. The chat input stays usable meanwhile.",
+			"draft.hint": "This survey is being built through the builder lifecycle (research + small patches); the wizard takes this seat automatically on launch.",
+			"draft.show": "Show card",
 			"draft.status.building": "Building",
 			"draft.status.launched": "Launched",
 			"draft.status.reopened": "Reopened",
@@ -461,9 +463,7 @@ a.rq-source:hover{text-decoration:underline}
 .rq-diagram svg{width:100%;height:auto;max-height:224px;display:block}
 .rq-diagramLoading,.rq-diagramError{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px}
 .rq-draftCard{width:100%;max-width:var(--dsh-chat-content-width);border:1px solid var(--dsw-alias-border-l2-darkmode-thin);background:var(--dsw-specific-input-major);border-radius:14px;padding:10px 14px;display:flex;flex-direction:column;gap:7px}
-/* Dock row: the card renders under the conversation input (composer.dock),
-   so it only needs a breath of space from the input card above it. */
-.rq-dockRow{margin-top:8px}
+.rq-draftStrip{display:flex;align-items:center;gap:8px}
 .rq-draftCard,.rq-draftCard *{box-sizing:border-box}
 .rq-draftHead{display:flex;align-items:center;gap:8px;min-width:0}
 .rq-draftTitle{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:500;color:var(--dsw-alias-label-primary)}
@@ -1315,32 +1315,37 @@ a.rq-source:hover{text-decoration:underline}
 		}
 		/**
 		* Tracker-style builder progress card (operator pattern: the tracking
-		* board / goal UI), rendered as a conversation.composer.dock row — a
-		* list slot beside the input, NOT the composer chain seat. A building
-		* draft is passive progress information: electing it in the chain hid
-		* the real composer (overlay fallback is display:none while an entry is
-		* elected), and a dismissed card rendered null while still elected,
-		* leaving the whole seat empty — the chat appeared to vanish. A dock
-		* row renders (or not) independently; the input is never touched.
-		* Persists until dismissed — and a stale dismissal never hides active
-		* work: any revision or status change re-shows it. On launch the wizard
-		* takes the composer (draft frames stop rendering), so the card closes
-		* into the wizard by construction.
+		* board / goal UI), occupying the composer seat while a draft builds —
+		* the same in-space contract the launched wizard has. Dismissal
+		* collapses the card to a one-line strip IN the seat: it must never
+		* render null while claiming the composer (that left the seat empty
+		* and the chat vanished), and a stale dismissal — any revision or
+		* status change — re-expands the full card so active work is never
+		* hidden. On launch the wizard claims the seat (draft frames stop
+		* rendering), so the card closes into the wizard by construction.
 		*/
 		function DraftCard({ draft, t }) {
 			const [dismissed, setDismissed] = (0, react.useState)(() => loadDraftDismissal(draft.slug));
-			if (dismissed !== null && dismissed.revision === draft.revision && dismissed.status === draft.status) return null;
 			const progress = draft.progress ?? {};
 			const total = typeof progress.questions === "number" ? progress.questions : 0;
 			const done = typeof progress.complete === "number" ? progress.complete : 0;
 			const missing = typeof progress.missingFields === "number" ? progress.missingFields : 0;
+			const collapsed = dismissed !== null && dismissed.revision === draft.revision && dismissed.status === draft.status;
+			if (collapsed) {
+				return (0, react_jsx_runtime.jsx)("div", { className: "rq-frame", children: (0, react_jsx_runtime.jsxs)("div", { className: "rq-draftStrip", children: [
+					(0, react_jsx_runtime.jsx)("span", { className: "rq-chip", children: t("draft.eyebrow") }),
+					(0, react_jsx_runtime.jsx)("span", { className: "rq-draftTitle", children: draft.title ?? draft.slug }),
+					(0, react_jsx_runtime.jsxs)("span", { className: "rq-draftCounts", children: [`${String(done)}/${String(total)} `, t("draft.complete")] }),
+					(0, react_jsx_runtime.jsx)("button", { type: "button", className: "rq-crashRetry", onClick: () => setDismissed(null), children: t("draft.show") }),
+				] }) });
+			}
 			const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
 			const dismiss = () => {
 				const value = { revision: draft.revision, status: draft.status };
 				saveDraftDismissal(draft.slug, value);
 				setDismissed(value);
 			};
-			return (0, react_jsx_runtime.jsx)("div", { className: "rq-dockRow", children: (0, react_jsx_runtime.jsxs)("div", { className: "rq-draftCard", children: [
+			return (0, react_jsx_runtime.jsx)("div", { className: "rq-frame", children: (0, react_jsx_runtime.jsxs)("div", { className: "rq-draftCard", children: [
 				(0, react_jsx_runtime.jsxs)("div", { className: "rq-draftHead", children: [
 					(0, react_jsx_runtime.jsx)("span", { className: "rq-chip", children: t("draft.eyebrow") }),
 					(0, react_jsx_runtime.jsx)("span", { className: "rq-draftTitle", children: draft.title ?? draft.slug }),
@@ -1362,57 +1367,56 @@ a.rq-source:hover{text-decoration:underline}
 				(0, react_jsx_runtime.jsx)("div", { className: "rq-draftHint", children: t("draft.hint") }),
 			] }) });
 		}
-		/**
-		* Composer-dock row: the conversation's active builder draft as a
-		* tracker card under the input, subscribed to the store so it tracks
-		* draft/updated frames without depending on unrelated re-renders.
-		* Renders null when this session has no active draft — harmless in a
-		* list slot (a chain election would hide the composer fallback).
-		*/
-		function DraftDockRow({ sessionId, t }) {
-			(0, react.useSyncExternalStore)(surveyStore.subscribe, surveyStore.getVersion);
-			const draft = sessionId === undefined ? undefined : surveyStore.draftFor(sessionId);
-			if (draft === undefined) return null;
-			return (0, react_jsx_runtime.jsx)(SurveyBoundary, {
-				t,
-				key: `draft-${String(draft.slug)}`,
-				children: (0, react_jsx_runtime.jsx)(DraftCard, { draft, t }),
-			});
-		}
-		/** Composer occupant: renders the wizard for the selected session's pending survey. */
+		/** Composer occupant: the wizard for a pending survey, or the builder draft card for the conversation's active draft. */
 		function SurveyComposer(props) {
+			// Live draft data: the platform's matched prop can lag a
+			// draft/updated frame, so a draft seat re-derives from the store on
+			// every notify (this subscription keeps the component current).
+			(0, react.useSyncExternalStore)(surveyStore.subscribe, surveyStore.getVersion);
+			let matched = props.matched;
+			if (matched != null && matched.surveyId === undefined) {
+				const fresh = surveyStore.draftFor(matched.conversationId);
+				if (fresh !== undefined) matched = fresh;
+			}
 			// selectSurvey returns null (not undefined) when the viewed session
-			// has no pending survey — guard BOTH, or the key read crashes and
+			// has nothing to claim — guard BOTH, or the key read crashes and
 			// React unmounts the whole composer seat.
-			if (props.matched == null) return null;
+			if (matched == null) return null;
+			// Draft frames (builder card) carry slug; survey entries carry surveyId.
+			if (matched.surveyId === undefined) {
+				return (0, react_jsx_runtime.jsx)(SurveyBoundary, {
+					t: props.t,
+					key: `draft-${String(matched.slug)}`,
+					children: (0, react_jsx_runtime.jsx)(DraftCard, { draft: matched, t: props.t }),
+				});
+			}
 			// key by surveyId so a follow-up survey in the same session remounts with fresh drafts
 			return (0, react_jsx_runtime.jsx)(SurveyBoundary, {
 				t: props.t,
-				key: props.matched.surveyId,
-				children: (0, react_jsx_runtime.jsx)(SurveyFlow, { survey: props.matched, t: props.t, key: props.matched.surveyId }),
+				key: matched.surveyId,
+				children: (0, react_jsx_runtime.jsx)(SurveyFlow, { survey: matched, t: props.t, key: matched.surveyId }),
 			});
 		}
 		//#endregion
 		//#region lib/index.js
 		/**
-		* Chain routing: only a pending SURVEY claims the composer seat (the
-		* wizard). Builder drafts render as a conversation.composer.dock row
-		* instead (DraftDockRow) — a building draft must never hide the chat
-		* composer, and a dismissed card must never leave the seat empty.
+		* Chain routing: a pending survey claims the composer seat (the wizard);
+		* otherwise the conversation's active builder draft occupies it as the
+		* tracker card — the operator's in-space rule. Both beat the fallback
+		* input, which yields (overlay fallback is display:none) whenever an
+		* occupant claims.
 		*/
 		function selectSurvey({ session }) {
 			const sessionId = session?.sessionId;
 			if (sessionId === void 0) return null;
-			return surveyStore.get(sessionId) ?? null;
+			return surveyStore.get(sessionId) ?? surveyStore.draftFor(sessionId) ?? null;
 		}
 		const inject = ["slots", "locale"];
 		/**
-		* Client plugin body: locale dictionaries + the survey wizard into the
-		* conversation composer chain (the same seat the built-in question
-		* composer occupies; the two never claim one request — this one only
-		* claims its own pending surveys) + the builder draft card into the
-		* composer dock (list slot: rows render beside the input, never over
-		* it).
+		* Client plugin body: locale dictionaries + the composer-seat
+		* registration for the conversation composer chain (the same seat the
+		* built-in question composer occupies; the two never claim one request
+		* — this one claims its own pending surveys and its builder drafts).
 		*/
 		function apply(ctx) {
 			// Hydrate at activation: SSE + reconciliation poll against the
@@ -1425,12 +1429,6 @@ a.rq-source:hover{text-decoration:underline}
 				select: selectSurvey,
 				locale: NS
 			}, SurveyComposer));
-			ctx.slots.inject("conversation.composer.dock", () => ctx.slots.register({
-				name: "conversation.composer.dock",
-				id: "rich-questions-draft",
-				order: 20,
-				locale: NS
-			}, DraftDockRow));
 		}
 		exports.apply = apply;
 		exports.inject = inject;
