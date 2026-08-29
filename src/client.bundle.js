@@ -76,6 +76,11 @@ window.__ModuleLoader__.load({
 		function createSurveyStore() {
 			const bySession = new Map();
 			const draftsBySlug = new Map();
+			// Seat-level minimize: a minimized pending survey RELEASES the
+			// composer seat (select declines, the fallback input returns with
+			// its state intact) and survives wizard unmounts — the reopener
+			// button is the only surface while it holds.
+			const minimizedBySession = new Set();
 			const listeners = new Set();
 			let started = false;
 			// Monotonic tick for useSyncExternalStore subscribers: a stable
@@ -90,6 +95,7 @@ window.__ModuleLoader__.load({
 				const live = new Map(surveys.map((survey) => [survey.sessionId, survey]));
 				for (const [sessionId] of [...bySession]) if (!live.has(sessionId)) {
 					bySession.delete(sessionId);
+					minimizedBySession.delete(sessionId);
 					changed = true;
 				}
 				for (const survey of surveys) {
@@ -105,6 +111,9 @@ window.__ModuleLoader__.load({
 				if (frame.type === "survey/requested") {
 					if (bySession.get(frame.sessionId)?.surveyId !== frame.surveyId) {
 						bySession.set(frame.sessionId, { surveyId: frame.surveyId, sessionId: frame.sessionId, spec: frame.spec, createdAt: frame.createdAt ?? Date.now() });
+						// A NEW survey always claims fresh — a stale minimize
+						// flag from the previous one must not shadow it.
+						minimizedBySession.delete(frame.sessionId);
 						notify();
 					}
 				} else if (frame.type === "survey/banked") {
@@ -120,6 +129,7 @@ window.__ModuleLoader__.load({
 				} else if (frame.type === "survey/resolved") {
 					if (bySession.get(frame.sessionId)?.surveyId === frame.surveyId) {
 						bySession.delete(frame.sessionId);
+						minimizedBySession.delete(frame.sessionId);
 						notify();
 					}
 				} else if (frame.type === "draft/updated") {
@@ -209,7 +219,25 @@ window.__ModuleLoader__.load({
 				 */
 				start,
 				/** Forget locally after a successful action (the resolved frame confirms). */
-				forget(sessionId) { if (bySession.delete(sessionId)) notify(); },
+				forget(sessionId) {
+					minimizedBySession.delete(sessionId);
+					if (bySession.delete(sessionId)) notify();
+				},
+				/** Seat-level minimize state for one conversation. */
+				isMinimized(sessionId) { return minimizedBySession.has(sessionId); },
+				/**
+				 * Minimize releases the composer seat; expand re-claims it.
+				 * The notify re-renders every store subscriber — the wizard
+				 * unmounts on the next chain election, the reopener button
+				 * mounts from the composer dock.
+				 */
+				setMinimized(sessionId, value) {
+					const next = value === true;
+					if (minimizedBySession.has(sessionId) === next) return;
+					if (next) minimizedBySession.add(sessionId);
+					else minimizedBySession.delete(sessionId);
+					notify();
+				},
 				subscribe(listener) {
 					start();
 					listeners.add(listener);
@@ -286,7 +314,8 @@ window.__ModuleLoader__.load({
 			"error.unanswered": "请先选择一个选项或填写答案。",
 			"nav.prev": "上一题",
 			"nav.cancel": "放弃问卷",
-			"nav.minimize": "收起问卷卡片",
+			"nav.minimize": "收起问卷（回到对话输入）",
+			"nav.reopen": "展开进行中的问卷",
 			"nav.maximize": "展开问卷卡片"
 		};
 		const en = {
@@ -342,7 +371,8 @@ window.__ModuleLoader__.load({
 			"error.unanswered": "Please select an option or type an answer first.",
 			"nav.prev": "Previous question",
 			"nav.cancel": "Dismiss the survey",
-			"nav.minimize": "Collapse the survey card",
+			"nav.minimize": "Minimize the survey (back to chat input)",
+			"nav.reopen": "Reopen the survey in progress",
 			"nav.maximize": "Expand the survey card"
 		};
 		//#endregion
@@ -407,6 +437,9 @@ window.__ModuleLoader__.load({
 .rq-card,.rq-body,.rq-insight,.rq-source-list{scrollbar-width:none}
 .rq-card::-webkit-scrollbar,.rq-body::-webkit-scrollbar,.rq-insight::-webkit-scrollbar,.rq-source-list::-webkit-scrollbar{display:none;width:0;height:0}
 .rq-cardMinimized{max-height:none}
+.rq-reopener{position:fixed;right:20px;bottom:132px;z-index:60;width:40px;height:40px;border-radius:999px;display:grid;place-items:center;cursor:pointer;border:1px solid var(--dsw-alias-border-l2-darkmode-thin);background:var(--dsw-specific-input-major);color:var(--dsw-alias-state-business-primary);box-shadow:var(--dsw-shadow-lv2);transition:background-color 150ms cubic-bezier(0.2,0.7,0.2,1),color 150ms cubic-bezier(0.2,0.7,0.2,1)}
+.rq-reopener:hover{color:var(--dsw-alias-label-primary)}
+.rq-reopener:active{transform:scale(.96)}
 .rq-cardMinimized .rq-header{padding-bottom:14px}
 .rq-header{flex-shrink:0;justify-content:space-between;align-items:flex-start;gap:16px;padding:20px 16px 0 24px;display:flex}
 .rq-headingBlock{min-width:0}
@@ -843,7 +876,6 @@ a.rq-source:hover{text-decoration:underline}
 			const [cursor, setCursor] = (0, react.useState)(() => restored.cursor !== undefined ? restored.cursor : hasIntro ? -1 : 0);
 			const [busy, setBusy] = (0, react.useState)(null);
 			const [error, setError] = (0, react.useState)(null);
-			const [minimized, setMinimized] = (0, react.useState)(false);
 			// Questions whose answers were banked (committed to the host):
 			// view-only from then on — you can go back and read them, never
 			// re-answer. (Before the host learns "bank", this set is empty.)
@@ -1078,7 +1110,7 @@ a.rq-source:hover{text-decoration:underline}
 				className: "rq-frame",
 				"data-survey-key": survey.surveyId,
 				children: (0, react_jsx_runtime.jsxs)("section", {
-					className: cx("rq-card", minimized && "rq-cardMinimized"),
+					className: "rq-card",
 					"aria-label": typeof spec.title === "string" && spec.title !== "" ? spec.title : t("title.default"),
 					children: [
 						(0, react_jsx_runtime.jsxs)("header", {
@@ -1101,17 +1133,18 @@ a.rq-source:hover{text-decoration:underline}
 									className: "rq-headerActions",
 									children: [
 										(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
-											label: t(minimized ? "nav.maximize" : "nav.minimize"),
+											label: t("nav.minimize"),
 											side: "bottom",
 											delayMs: 500,
 											children: (0, react_jsx_runtime.jsx)("button", {
 												type: "button",
 												className: "rq-iconButton",
-												"aria-label": t(minimized ? "nav.maximize" : "nav.minimize"),
-												"aria-expanded": !minimized,
+												"aria-label": t("nav.minimize"),
 												disabled: busy !== null,
-												onClick: () => setMinimized((value) => !value),
-												children: minimized ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutline14, {}) : (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronUpOutline14, {})
+												/* Seat-level minimize: release the composer, keep the
+												 * survey resumable from the floating reopener button. */
+												onClick: () => surveyStore.setMinimized(survey.sessionId, true),
+												children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutline14, {})
 											})
 										}),
 										(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
@@ -1131,7 +1164,7 @@ a.rq-source:hover{text-decoration:underline}
 								})
 							]
 						}),
-						!minimized ? (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, {
+						(0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, {
 							children: [
 								(0, react_jsx_runtime.jsxs)("div", {
 									className: "rq-body",
@@ -1273,7 +1306,7 @@ a.rq-source:hover{text-decoration:underline}
 									]
 								})
 							]
-						}) : null
+						})
 					]
 				})
 			});
@@ -1377,6 +1410,29 @@ a.rq-source:hover{text-decoration:underline}
 			] }) });
 		}
 		/** Composer occupant: the wizard for a pending survey, or the builder draft card for the conversation's active draft. */
+		/**
+		 * The way back: while a pending survey is MINIMIZED (seat released,
+		 * plain input restored), a round floating button on the right edge —
+		 * above the app's bottom-right floating controls — reopens it.
+		 * Registered under conversation.composer.dock, which only renders
+		 * inside the fallback composer bar: exactly the unclaimed state.
+		 */
+		function SurveyReopener(props) {
+			(0, react.useSyncExternalStore)(surveyStore.subscribe, surveyStore.getVersion);
+			const sessionId = props.sessionId;
+			const pending = sessionId === undefined ? undefined : surveyStore.get(sessionId);
+			if (pending === undefined || sessionId === undefined || !surveyStore.isMinimized(sessionId)) return null;
+			const t = typeof props.t === "function" ? props.t : ((key) => key);
+			return (0, react_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "rq-reopener",
+				title: t("nav.reopen"),
+				"aria-label": t("nav.reopen"),
+				onClick: () => surveyStore.setMinimized(sessionId, false),
+				children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconQuestionOutline14, { size: 18 })
+			});
+		}
+
 		function SurveyComposer(props) {
 			// Live draft data: the platform's matched prop can lag a
 			// draft/updated frame, so a draft seat re-derives from the store on
@@ -1398,6 +1454,10 @@ a.rq-source:hover{text-decoration:underline}
 			// has nothing to claim — guard BOTH, or the key read crashes and
 			// React unmounts the whole composer seat.
 			if (matched == null) return null;
+			// The election can lag one render behind a minimize toggle (the
+			// chain re-elects on its next pass): decline here so the seat
+			// never shows a minimized survey's wizard.
+			if (matched.surveyId !== undefined && surveyStore.isMinimized(matched.sessionId)) return null;
 			// Draft frames (builder card) carry slug; survey entries carry surveyId.
 			if (matched.surveyId === undefined) {
 				return (0, react_jsx_runtime.jsx)(SurveyBoundary, {
@@ -1425,6 +1485,12 @@ a.rq-source:hover{text-decoration:underline}
 		function selectSurvey({ session }) {
 			const sessionId = session?.sessionId;
 			if (sessionId === void 0) return null;
+			// A minimized pending survey releases the seat entirely — the
+			// plain input returns and the reopener button (composer dock)
+			// carries the way back. The superseded draft stays hidden too:
+			// launching a survey outranked it, and minimize must not resurrect
+			// a stale builder card.
+			if (surveyStore.isMinimized(sessionId)) return null;
 			return surveyStore.get(sessionId) ?? surveyStore.draftFor(sessionId) ?? null;
 		}
 		const inject = ["slots", "locale"];
@@ -1445,9 +1511,20 @@ a.rq-source:hover{text-decoration:underline}
 				select: selectSurvey,
 				locale: NS
 			}, SurveyComposer));
+			// The reopener rides the composer dock (list kind — coexists with
+			// the todo dock): it renders only while the fallback composer bar
+			// is on screen, which is exactly the minimized state.
+			ctx.slots.inject("conversation.composer.dock", () => ctx.slots.register({
+				name: "conversation.composer.dock",
+				order: 10,
+				locale: NS,
+				inject: (zone) => ({ sessionId: zone?.session?.sessionId })
+			}, SurveyReopener));
 		}
 		exports.apply = apply;
 		exports.inject = inject;
+		/** Test-only seam: the live store for the client smoke test. */
+		exports.__store = surveyStore;
 		return module.exports;
 	}
 });
