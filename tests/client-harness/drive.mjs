@@ -68,7 +68,7 @@ const requireShim = (id) => {
 }
 const moduleExports = captured.factory(requireShim)
 
-let registered = null
+let registered = new Map()
 let dicts = null
 const ctx = {
   effect(fn) {
@@ -78,15 +78,18 @@ const ctx = {
   locale: { register(_ns, d) { dicts = d } },
   slots: {
     inject(_slot, run) { run() },
-    register(def, Component) { registered = { def, Component } },
+    register(def, Component) { registered.set(def.name, { def, Component }) },
   },
 }
 moduleExports.apply(ctx)
-if (registered === null) { console.log(`[${LABEL}] FAIL: slot component never registered`); process.exit(1) }
+const composerEntry = registered.get('conversation.composer')
+const dockEntry = registered.get('conversation.composer.dock')
+if (composerEntry === undefined) { console.log(`[${LABEL}] FAIL: composer chain entry never registered`); process.exit(1) }
+if (dockEntry === undefined) { console.log(`[${LABEL}] FAIL: composer dock entry never registered`); process.exit(1) }
 
 document.dispatchEvent(new dom.window.Event('visibilitychange'))
 await new Promise((r) => setTimeout(r, 120))
-const matched = registered.def.select({ session: { sessionId: 'session-1' } })
+const matched = composerEntry.def.select({ session: { sessionId: 'session-1' } })
 if (matched === null || matched === undefined) { console.log(`[${LABEL}] FAIL: store did not hydrate a pending survey`); process.exit(1) }
 const en = dicts?.en ?? {}
 const t = (k) => en[k] ?? k
@@ -94,7 +97,7 @@ const t = (k) => en[k] ?? k
 const container = document.createElement('div')
 document.body.appendChild(container)
 const root = ReactDOMClient.createRoot(container)
-root.render(React.createElement(registered.Component, { matched, t }))
+root.render(React.createElement(composerEntry.Component, { matched, t }))
 await new Promise((r) => setTimeout(r, 120))
 
 const text = () => container.textContent ?? ''
@@ -177,7 +180,7 @@ await flush()
 
 step('matched=null renders empty, composer survives', () => {
   const before = errors.length
-  root.render(React.createElement(registered.Component, { matched: null, t }))
+  root.render(React.createElement(composerEntry.Component, { matched: null, t }))
   return flush().then(() => {
     if (errors.length !== before) throw new Error(`runtime errors after null render: ${errors.slice(before).join(' ;; ').slice(0, 200)}`)
     assert(document.body.contains(container), 'container unmounted')
@@ -185,9 +188,12 @@ step('matched=null renders empty, composer survives', () => {
 })
 await flush()
 
-// Builder draft card: tracker-style, persists until dismissed, reappears on
-// revision change (a stale dismissal never hides active work).
-pending.length = 0 // the survey settled; the seat falls to the draft card
+// Builder draft card: a dock row under the input, never a chain claimant.
+// Regression (the "chat disappears" bug): the old bundle elected building
+// drafts in the conversation.composer chain — hiding the composer fallback —
+// and a dismissed card rendered null while still elected, leaving the whole
+// composer seat empty.
+pending.length = 0 // the survey settled; the chain seat must fall back
 draftsManifest = {
   v: 1,
   activeByConversation: { 'session-1': 'builder-demo' },
@@ -197,39 +203,105 @@ draftsManifest = {
 }
 document.dispatchEvent(new dom.window.Event('visibilitychange'))
 await flush()
-let cardMatched = registered.def.select({ session: { sessionId: 'session-1' } })
-step('seat falls from wizard to the draft card', () => {
-  assert(cardMatched !== null && cardMatched !== undefined, 'select returned nothing')
-  assert(cardMatched.slug === 'builder-demo', `select returned ${JSON.stringify(cardMatched).slice(0, 80)}`)
+step('building draft does NOT claim the composer chain', () => {
+  const chainMatched = composerEntry.def.select({ session: { sessionId: 'session-1' } })
+  assert(chainMatched === null, `chain elected a draft: ${JSON.stringify(chainMatched).slice(0, 80)}`)
 })
-root.render(React.createElement(registered.Component, { matched: cardMatched, t }))
+// The dock row subscribes to the store itself: render once, then drive the
+// store purely through hydration frames — no manual re-render.
+const dockContainer = document.createElement('div')
+document.body.appendChild(dockContainer)
+const dockRoot = ReactDOMClient.createRoot(dockContainer)
+dockRoot.render(React.createElement(dockEntry.Component, { sessionId: 'session-1', t }))
 await flush()
-step('draft card renders tracker UI', () => {
-  assert(text().includes('Question Builder demo'), 'draft title missing')
-  assert(text().includes(t('draft.status.building')), 'status chip missing')
-  assert(text().includes('4/12'), 'progress counts missing')
-  assert(text().includes('23'), 'missing-fields count absent')
-  assert(container.querySelector('.rq-draftCard') !== null, 'card element missing')
+const dockText = () => dockContainer.textContent ?? ''
+const dockButtons = () => [...dockContainer.querySelectorAll('button')]
+step('draft card renders as a dock row', () => {
+  assert(dockText().includes('Question Builder demo'), 'draft title missing')
+  assert(dockText().includes(t('draft.status.building')), 'status chip missing')
+  assert(dockText().includes('4/12'), 'progress counts missing')
+  assert(dockText().includes('23'), 'missing-fields count absent')
+  assert(dockContainer.querySelector('.rq-draftCard') !== null, 'card element missing')
 })
-step('dismiss hides the card', () => {
-  const dismiss = buttons().find((b) => (b.getAttribute('aria-label') ?? '') === t('draft.dismiss'))
+step('dismiss hides the dock row only', () => {
+  const dismiss = dockButtons().find((b) => (b.getAttribute('aria-label') ?? '') === t('draft.dismiss'))
   assert(dismiss !== undefined, 'dismiss button missing')
   dismiss.click()
 })
 await flush()
-step('card hidden after dismissal', () => assert(container.querySelector('.rq-draftCard') === null, 'card still rendered'))
+step('card hidden after dismissal', () => assert(dockContainer.querySelector('.rq-draftCard') === null, 'card still rendered'))
+step('chain seat still declines while the card is merely dismissed', () => {
+  const chainMatched = composerEntry.def.select({ session: { sessionId: 'session-1' } })
+  assert(chainMatched === null, 'chain elected after dismissal — the seat would empty out')
+})
 draftsManifest.drafts['builder-demo'].revision = 3
 draftsManifest.drafts['builder-demo'].updatedAt = Date.now()
 document.dispatchEvent(new dom.window.Event('visibilitychange'))
 await flush()
-cardMatched = registered.def.select({ session: { sessionId: 'session-1' } })
-root.render(React.createElement(registered.Component, { matched: cardMatched, t }))
+step('revision bump re-shows the card through the store subscription', () => {
+  assert(dockContainer.querySelector('.rq-draftCard') !== null, 'card did not reappear after revision change')
+})
+step('no-draft session renders an empty dock row', () => {
+  const before = errors.length
+  dockRoot.render(React.createElement(dockEntry.Component, { sessionId: 'session-other', t }))
+  return flush().then(() => {
+    if (errors.length !== before) throw new Error(`errors after empty dock render: ${errors.slice(before).join(' ;; ').slice(0, 200)}`)
+    assert(dockContainer.textContent === '' || !dockContainer.textContent.includes('Question Builder'), 'foreign draft leaked into the row')
+    dockRoot.render(React.createElement(dockEntry.Component, { sessionId: 'session-1', t }))
+  })
+})
 await flush()
-step('revision bump re-shows the card', () => assert(container.querySelector('.rq-draftCard') !== null, 'card did not reappear after revision change'))
+
+// Scenario sweep: status transitions and coexistence around the dock row.
+step('pending survey + building draft: chain elects the survey, dock keeps the card', () => {
+  pending.push({ surveyId: 'sv-1', sessionId: 'session-1', createdAt: Date.now(), spec: SPEC })
+  document.dispatchEvent(new dom.window.Event('visibilitychange'))
+})
+await flush()
+step('coexistence: chain matched the survey', () => {
+  const chainMatched = composerEntry.def.select({ session: { sessionId: 'session-1' } })
+  assert(chainMatched !== null && chainMatched.surveyId === 'sv-1', `chain did not elect the survey: ${JSON.stringify(chainMatched).slice(0, 80)}`)
+  assert(dockContainer.querySelector('.rq-draftCard') !== null, 'draft card vanished while a survey is pending')
+  pending.length = 0
+  document.dispatchEvent(new dom.window.Event('visibilitychange'))
+})
+await flush()
+draftsManifest.drafts['builder-demo'].status = 'launched'
+draftsManifest.drafts['builder-demo'].updatedAt = Date.now()
+document.dispatchEvent(new dom.window.Event('visibilitychange'))
+await flush()
+step('launched draft stops rendering the dock card', () => {
+  assert(dockContainer.querySelector('.rq-draftCard') === null, 'card still rendered after launch — it must close into the wizard')
+})
+draftsManifest.drafts['builder-demo'].status = 'building'
+draftsManifest.drafts['builder-demo'].revision = 4
+draftsManifest.drafts['builder-demo'].updatedAt = Date.now()
+document.dispatchEvent(new dom.window.Event('visibilitychange'))
+await flush()
+step('reopened-for-editing draft shows the card again', () => {
+  assert(dockContainer.querySelector('.rq-draftCard') !== null, 'card did not return after status change back to building')
+})
+draftsManifest.drafts['builder-demo'].status = 'discarded'
+draftsManifest.drafts['builder-demo'].updatedAt = Date.now()
+document.dispatchEvent(new dom.window.Event('visibilitychange'))
+await flush()
+step('discarded draft drops the card entirely', () => {
+  assert(dockContainer.querySelector('.rq-draftCard') === null, 'card rendered for a discarded draft')
+})
+step('cleared manifest leaves no stale card and raises no errors', () => {
+  const before = errors.length
+  draftsManifest = { v: 1, activeByConversation: {}, drafts: {} }
+  document.dispatchEvent(new dom.window.Event('visibilitychange'))
+  return flush().then(() => {
+    if (errors.length !== before) throw new Error(`errors after manifest clear: ${errors.slice(before).join(' ;; ').slice(0, 200)}`)
+    assert(dockContainer.querySelector('.rq-draftCard') === null, 'stale card after manifest clear')
+  })
+})
+await flush()
 
 if (POISON !== null) {
   step('poison: mount + start', () => {
-    root.render(React.createElement(registered.Component, {
+    root.render(React.createElement(composerEntry.Component, {
       matched: { surveyId: 'sv-poison', sessionId: 'session-1', createdAt: Date.now(), spec: POISON },
       t,
     }))

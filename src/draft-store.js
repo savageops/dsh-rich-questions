@@ -147,11 +147,36 @@ export function createDraftStore({ workspaceRoot, profileRoot, structureQuestion
         if (node === undefined) return { ok: false, error: `patch names question "${id}" which does not exist in draft "${slug}" — add it via the structure op` }
         if (patchNode.next !== undefined) ignored.push(`${id}.next`)
         if (Array.isArray(patchNode.options)) {
-          node.options = patchNode.options.map((option, index) => {
-            if (option?.next !== undefined) ignored.push(`${id}.options[${index}].next`)
+          // Per-field merge against the existing option at the same index,
+          // over the LONGER of the two lists: an option patch carries only
+          // what changes (e.g. sources), untouched tail options survive, and
+          // wiping previously patched prose because it was omitted would
+          // make the [research → patch] loop lose work on every iteration.
+          // Reshaping the whole list (reorder, delete, renumber) belongs to
+          // the structure op, which replaces wholesale by design.
+          const previous = node.options ?? []
+          const count = Math.max(previous.length, patchNode.options.length)
+          const nextOptions = []
+          for (let index = 0; index < count; index += 1) {
+            const option = patchNode.options[index]
+            if (option === undefined) {
+              nextOptions.push(previous[index])
+              continue
+            }
+            if (option === null || typeof option !== 'object') {
+              ignored.push(`${id}.options[${index}] (non-object entry)`)
+              nextOptions.push(previous[index] ?? { label: `TODO: label ${index + 1}` })
+              continue
+            }
+            if (option.next !== undefined) ignored.push(`${id}.options[${index}].next`)
             const { next, ...content } = option
-            return { ...content, label: typeof content?.label === 'string' && content.label.trim() !== '' ? content.label : node.options?.[index]?.label ?? `TODO: label ${index + 1}` }
-          })
+            const merged = { ...(previous[index] ?? {}), ...content }
+            nextOptions.push({
+              ...merged,
+              label: typeof merged.label === 'string' && merged.label.trim() !== '' ? merged.label : previous[index]?.label ?? `TODO: label ${index + 1}`,
+            })
+          }
+          node.options = nextOptions
         }
         for (const field of ['prompt', 'header', 'detail']) {
           if (patchNode[field] !== undefined) node[field] = patchNode[field]

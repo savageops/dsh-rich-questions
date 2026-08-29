@@ -26,7 +26,7 @@ const ctx = {
 }
 apply(ctx, {})
 const byName = new Map(defs.map((def) => [def.name, def]))
-assert.equal(defs.length, 4, `expected 4 tools, got ${defs.map((d) => d.name).join(', ')}`)
+assert.equal(defs.length, 5, `expected 5 tools, got ${defs.map((d) => d.name).join(', ')}`)
 for (const definition of defs) {
   assert.equal(definition.output?.schema?.type, 'object', `${definition.name} must declare an object output schema`)
   assert.equal(typeof definition.output?.render, 'function', `${definition.name} must declare an output renderer`)
@@ -140,6 +140,16 @@ assert.equal(record.outcome, 'answered')
 assert.equal(record.title, 'Drive Test')
 assert.ok(Array.isArray(record.answers) && record.answers.length === 1, 'settled record lacks the answers')
 
+// Memory: the records reader finds the settled survey whole (prompt +
+// labels + nothing injected anywhere — read-only by design).
+const recs = await byName.get('survey_records').execute({ query: 'drive' }, exec)
+assert.equal(recs.count, 1)
+assert.equal(recs.records[0].title, 'Drive Test')
+assert.equal(recs.records[0].answers[0].prompt, 'Pick?')
+assert.equal(recs.records[0].answers[0].selected[0], 'La')
+const recsAll = await byName.get('survey_records').execute({}, exec)
+assert.ok(recsAll.count >= 1, 'unqueried read lists recent records')
+
 // Reroll loop: relaunch, the user rerolls, the draft reopens.
 const relaunchPromise = byName.get('survey_draft_launch').execute({ slug: 'drive-test' }, exec)
 relaunchPromise.catch((error) => console.error('relaunch rejected:', error instanceof Error ? `${error.code}: ${error.message.slice(0, 200)}` : error))
@@ -159,5 +169,5 @@ const manifest = JSON.parse(await readFile(join(process.env.DSH_RICH_QUESTIONS_H
 assert.equal(manifest.drafts['drive-test'].status, 'reopened', 'reroll must reopen the draft in the manifest')
 assert.ok(frames.some((chunk) => chunk.includes('"status":"reopened"')), 'reopen did not emit its frame')
 
-console.log('host drive OK: 4 tools, begin/patch/get/launch-gate/structure/discard, quick+intro authoring, answer + settled record, reroll + reopen, SSE frames observed')
+console.log('host drive OK: 5 tools, begin/patch/get/launch-gate/structure/discard, quick+intro authoring, answer + settled record, records reader, reroll + reopen, SSE frames observed')
 for (const fn of closeHandlers) fn() // drain the heartbeat so the test process exits

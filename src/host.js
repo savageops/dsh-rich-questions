@@ -16,6 +16,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
+import { readdir, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { computePath, draftCompleteness, resolveSurveyArgument, validateAnswers, validateSpec } from './survey-engine.js'
@@ -65,32 +66,39 @@ function draftStoreFor(exec, structureQuestionCap) {
 }
 
 /**
- * Model-facing announcement: when to reach for ask_survey, the authoring
- * contract, and the answer shape. Kept tight — the tool description carries
- * the schema, this carries the judgment.
+ * Model-facing announcement: the authoring doctrine for rich surveys — the
+ * loop, the bar, the feel, and the why. Layered placement: the tool
+ * descriptions repeat the quality bar at authoring time, the preflight
+ * instructions repeat it at reroll/push time, and an answered result carries
+ * the handling contract; this section is the always-on home. Bilingual,
+ * locale-selected below: a session reads one half only.
  */
+const ANNOUNCEMENT_EN = [
+  "dsh-rich-questions plugin — the rich survey system: ask_survey (direct) plus the draft builder (survey_draft_set / survey_draft_get / survey_draft_launch). This doctrine exists so every survey you issue is golden-standard: deeply researched, plainly spoken, worth the user’s full attention. The tool descriptions repeat the critical bar at the moment you author; this section carries the loop, the rules, and the why.",
+  "WHEN — 4+ questions, or any branching (an answer decides what gets asked next), or options needing more than one sentence of explanation → ask_survey. 1-3 simple confirmations → ask_user_question. 10+ questions or research-backed work → the BUILDER loop, never one giant call: big surveys authored in a single payload are how shallow surveys happen.",
+  "THE LOOP (commanded, research-first) — (1) RESEARCH: before locking any structure, study 9-12 comparable systems — competing tools, products, open-source repositories, internal precedents. Write it down or it did not happen: findings → .docs/research/, condensed digests → .docs/digest/, captured competitor UI/API traces → .docs/research/rips/, downloaded competitor source → .refs/. (2) BEGIN: survey_draft_set op=begin locks the skeleton (entry, question ids, ≥5 option keys per question; TODO stubs allowed). (3) ENRICH: loop [research → survey_draft_set op=patch, at most 3 questions per call] until survey_draft_get reports zero gaps; reshaping the structure goes through op=structure (bumps the revision). (4) VERIFY: survey_draft_get is the launch gate — the checklist must come back empty. (5) LAUNCH: survey_draft_launch; the wizard takes the composer seat and the tool waits with the user. (6) HONOR: see THE FEEL.",
+  "THE BAR (every survey; no exceptions) — 1. Orienting intro: what this decides, why now, what happens with the answers, roughly how long. 2. Self-contained prompts: define every term where it is used, say where it applies and what the answer changes — a reader who missed the conversation must understand the question standing alone. 3. ≥5 stance-differentiated options per option-bearing question: positions a reader could actually defend — never filler, never “Option A”; the free-text row is an escape hatch, not an option. 4. Insight triples: every judgment option’s insight reads Promise / Price / Present — Promise: what choosing this sets up when done right · Price: what it costs or risks · Present: where things stand today, with at least one concrete handle (a number, a name, a version, a date). An option without its triple is an uninformed choice you manufactured. 5. Branch-or-justify: if an answer should change what gets asked next, there MUST be a branch; a flat sequence where the answer obviously matters is a defect. 6. One language: every user-facing string in the user’s chat language (English chat → English survey, 中文对话 → 中文问卷); option keys stay short ASCII (a, b, c…). 7. Proportionality: tiny confirmations may be lighter (2-4 options, short prompts) — but self-contained prompts and honest options are the floor everywhere.",
+  "THE FEEL (handling the human — this is why the tool earns trust) — MIRROR-BACK: the moment results return, open your next turn by restating the user’s stance in one line — “You chose X over Y because Z, so I will…”. Answers must feel heard before they are used. FOLLOW-THROUGH RECEIPT: when a decision lands, trace it to its answer (“Q3 → picked A → therefore…”); surveys that visibly change things get answered quickly next time. NO RE-ASKING: call survey_records (the settled-record reader) and check this session’s history before asking anything already answered — re-asking says nobody was listening. SOLICIT THE WHY: when an answer surprises you, ask for the reason (the wizard’s inline justify affordance, or chat) — a stated why is intent you can act on.",
+  "AUTHORING CONTRACT — {survey: {title?, intro? (markdown first page), entry, questions: {qid: {prompt, header?, detail? (markdown backstory — never a substitute for an anchored prompt), multiSelect?, allowCustom? (default true), skippable? (default true), options: [{key (short ASCII; a, b, c…), label (a short stance, never “Option A”), description? (one sentence), insight? (Promise / Price / Present markdown), diagram? (compact Mermaid via the branch icon; keep it small enough to fit), sources?, recommended? (badge; listed first), next? (id, id array, or null = branch ends; omitted = question-level next)}], next?}}, quick? (≤6 one-click templates: [{key a-f, label, description?, insight?, answers: {qid: {selected?, custom?}}}])}. Hard rules: entry must exist; every next target must exist — dangling references are the #1 rejection, recheck after every trim; the graph is acyclic; keys unique per question; quick answers may name only questions their selections reach, with option keys that exist (multi-key or key+custom only on multiSelect). Unreachable questions are never asked. Validation names the exact offending spot — one retry fixes it.",
+  "RESULTS — outcome “answered” carries path (the order actually asked), answers (labels resolved, justifications attached), skipped. Store every Q&A verbatim as numbered records and derive follow-ups from them; the result’s handling field restates THE FEEL at the moment it matters.",
+  "PREFLIGHT — next to Start the user may hit Reroll / Push / Discuss; each returns normally with an instruction field. Reroll: rewrite cleaner AND fix every bar gap — depth never shrinks. Push: write the research digest, study ≥12 systems, re-author at ≥2× depth, evidence-cited. Discuss: open a chat conversation first, no form. Small surveys may be re-issued with ask_survey directly; large ones re-enter THE LOOP at step 3 (ENRICH).",
+].join("\n\n")
+
+const ANNOUNCEMENT_ZH = [
+  "dsh-rich-questions 插件——富问卷系统：ask_survey（直接发起）+ 问卷构建器（survey_draft_set / survey_draft_get / survey_draft_launch）。本守则的存在目的：让你发出的每份问卷都是金标准——研究扎实、语言干净、值得用户认真作答。工具描述会在你动笔那一刻重复关键底线；本节承载流程、规则与理由。",
+  "何时用——≥4 题、或存在分支（某个答案决定接下来问什么）、或选项需要超过一句的解释 → ask_survey。1-3 个简单确认 → ask_user_question。≥10 题或需要研究支撑的问卷 → 一律走构建器循环，绝不用一次巨型调用：单次写完的大问卷正是浅问卷的来源。",
+  "构建循环（强制，研究先行）——(1) 研究：锁定结构之前，先研究 9-12 个同类系统（竞品工具、产品、开源仓库、内部先例）。不落盘的研究等于没做：研究发现 → .docs/research/；精炼摘要 → .docs/digest/；抓取的竞品 UI/API 痕迹 → .docs/research/rips/；下载的竞品源码 → .refs/。(2) 起稿：survey_draft_set op=begin 锁骨架（entry、题目 id、每题 ≥5 个选项 key；允许 TODO 占位）。(3) 充实：循环〔研究 → survey_draft_set op=patch（每次 ≤3 题）〕直到 survey_draft_get 零缺口；改结构走 op=structure（revision+1）。(4) 校验：survey_draft_get 是发射闸门——清单必须清零。(5) 发射：survey_draft_launch；向导接管输入区，工具与用户一起等待。(6) 兑现：见「对人的分寸」。",
+  "质量底线（每份问卷，无例外）——1. 导语定锚：这决定什么、为何是现在、答案怎么用、大约多久。2. 自包含题干：术语就地定义、说明适用位置与答案会改变什么——错过上下文的读者也能独立看懂。3. 每题 ≥5 个有立场差异的选项：读者真的可能选的立场——绝不凑数，绝不用「选项A」；自由文本行是逃生门，不算选项。4. 洞察三元组：每个判断型选项的 insight 按 承诺 / 代价 / 现状（Promise / Price / Present）展开——承诺：选对了会得到什么 · 代价：放弃什么、冒什么险 · 现状：今天站在哪里，并给出至少一个具体抓手（数字、名字、版本、日期）。没有三元组的选项是你制造的盲选。5. 有分支或说明理由：某个答案理应改变后续提问时，必须有分支；答案明显重要却拍平成序列就是缺陷。6. 语言一致：所有用户可见文案用用户当前聊天语言（中文对话 → 中文问卷）；选项 key 一律短 ASCII（a、b、c…）。7. 比例原则：极小确认可以更轻（2-4 个选项、短题干）——但自包含题干与诚实选项是处处生效的底线。",
+  "对人的分寸（这是工具赢得信任的原因）——镜子回应：结果一返回，下一轮第一句先复述用户立场（「你选了 X 而不是 Y，因为 Z，所以我会……」）。答案必须先被听见，再被使用。落实回执：每个决定落地时追溯到来源（「第3题 → 选了 A → 因此……」）；看得见改变的问卷，下次才会被认真填。不重复追问：先调用 survey_records（已归档问卷读取器）并查本会话历史，问过的绝不重问——重问等于没人听。追问理由：答案出乎意料时，追问为什么（向导内的理由输入，或在对话里问）——说出口的理由就是可执行的意图。",
+  "编写契约—— {survey: {title?, intro?(markdown 首屏), entry, questions: {qid: {prompt, header?, detail?(markdown 背景——不能替代有锚点的题干), multiSelect?, allowCustom?(默认 true), skippable?(默认 true), options: [{key(短 ASCII；a、b、c…), label(一句立场，绝不用「选项A」), description?(一句话), insight?(承诺/代价/现状 markdown), diagram?(紧凑 Mermaid，经分支图标展开；务必小), sources?, recommended?(徽章；放首位), next?(id、id 数组或 null=分支结束；省略=题目级 next)}], next?}}, quick?(≤6 个一键模板: [{key a-f, label, description?, insight?, answers: {qid: {selected?, custom?}}}])}。硬规则：entry 必须存在；所有 next 目标必须存在——悬空引用是第一大拒稿原因，删改后逐个复查；图必须无环；key 每题唯一；quick 的 answers 只能引用其选择实际可达的题目、且 key 必须存在（多 key / key+custom 仅限 multiSelect）。未被到达的题目不会被问。校验会指出确切位置——一次重试即可修复。",
+  "结果处理——outcome「answered」含 path（实际提问顺序）、answers（label 已解析、理由已附）、skipped。把每条问答逐字存为编号记录并据此推导后续；结果里的 handling 字段会在最关键的时刻重申「对人的分寸」。",
+  "预检重定向——Start 旁用户可点 重掷 / 深挖 / 讨论；都正常返回并附 instruction。重掷：更干净地重写并修复所有底线缺口——深度绝不缩水。深挖：先写研究摘要、研究 ≥12 个系统、以 ≥2× 深度重新编写、洞察全部引用证据。讨论：先在对话里聊清楚，不出表。小问卷可直接重发 ask_survey；大问卷从构建循环第 (3) 步重新进入。",
+].join("\n\n")
+
 /**
- * Model-facing announcement: when to reach for ask_survey, the authoring
- * contract, and the answer shape. Bilingual, cleanly split — the model reads
- * whichever half matches its conversation. Kept tight — the tool description
- * carries the schema, this carries the judgment.
+ * Locale-selected announcement: shipping both halves cost every session
+ * (including subagent children) ~4k tokens for a translation it never reads.
  */
-const ANNOUNCEMENT_EN = `dsh-rich-questions plugin installed (rich question/survey system): it extends ask_user_question into a branching ask_survey. Use ask_survey when collecting structured opinions/expectations/acceptance from the user and any of these hold: 4+ questions, a large questionnaire (10+), branching between questions (an earlier answer decides which questions follow), or options that need more than one sentence of explanation (hover insights, sources, tradeoffs). Keep ask_user_question for 1-3 simple confirmation/single-choice questions.
-Language rule: author ALL user-facing survey content (title, intro, prompts, option labels/descriptions/insights, quick-template labels/insights) in the language the user is currently chatting in — an English conversation gets English content, 中文 gets 中文, any other language gets that language. Be consistent: one language across the whole survey. Option keys stay short ASCII letters (a, b, c...) regardless of language.
-Depth bar: a rich survey earns its place. For real expectation/alignment/scoping work, default to 10-30 questions — the 4-question threshold is the entry condition, not the target. Branch wherever one answer changes what matters next: any survey over 6 questions should carry at least 2-3 real branch points (option-level next routing to different question ranges), converging later where paths rejoin. Every question with options carries AT LEAST 5 (keys a-e, aim 5-8) — genuinely distinct stances a reader could disagree with, never filler; the free-text input row is separate and not counted. Give every option that involves judgment a real insight (what great looks like / tradeoff / (today)); use diagrams for architecture or flow choices; ship quick templates (3-6) whenever the user might already know their destination. A flat 4-question spec with no branching is a miss — if the topic genuinely needs only 1-3 flat questions, use ask_user_question instead.
-Reader-first doctrine (owner-mandated; applies to EVERY survey you author and to every reroll/push rewrite): write for the deciding user — plain-spoken, direct, zero fluff. Never assume the reader knows what you are referring to: spell out the obvious, define every term on first use, and anchor each question to the reader's situation and what their answer changes. Self-contained prompts (hard rule): every question must make sense standing alone to a reader who missed the conversation — no naked concept name-drops. If a prompt names a mechanism (a grace period, fencing, a cache layer), the same prompt defines it in a clause, says where in the reader's setup it applies, and what the answer changes. Violation: "How long does the grace period last?" Compliant: "When two sessions can write the same state, the older one gets fenced (its writes start being rejected) but keeps write access briefly — the grace period — so an in-flight command can finish. How long should that window be? Too short discards work mid-command; too long brings back two-writer confusion." Put longer backstory in detail (markdown) — never shrink the question into vagueness. Be specific and insightful — the strongest available form of specificity per claim: a number, a concrete example, or a named comparison; never a floating adjective. Obvious, not oblivious. Hard requirements: full structure always — an orienting intro (what this is, why now, what happens with the answers, roughly how long), header grouping, and a description line on every option; every insight on every judgment option carries what-great-looks-like + the tradeoff + (today) + one concrete handle; banned: vague-abstraction options (every option takes a position a reader could disagree with), one-sided selling insights, and judgment options without insights; quick templates ship on nearly every survey, as named stances ("Vercel-grade polish + DX", never "Option A").
-Authoring contract: {survey: {title?, intro? (markdown first page), entry (first question id), questions: {qid: {prompt, header? (grouping), detail? (markdown context), multiSelect?, allowCustom? (default true), skippable? (default true), options: [{key (arbitrary string, single letters a-z recommended, more for multi-select, "other" for free-text), label, description? (one sentence), insight? (markdown ~6 lines: what great looks like / tradeoff / (today) state), diagram? (optional compact Mermaid, few nodes — opened via the branch icon beside "?", panel does not scroll, keep it small), sources? (links or citations), recommended? (put first), next? (question id(s) that follow this option; null = branch ends; omit = fall back to question-level next)}], next? (question-level default: used on skip / free-text / options without their own next)}}}, quick? (up to 6 one-click templates, keys a-f not just a-d: [{key, label, description?, insight?, diagram?, recommended?, answers: {qid: {selected?: [key,...], custom?}}}]. The user sees these next to "Start" instead of answering question by question; picking one applies its answers verbatim and submits immediately, so each template's answers must be coherent and cover the questions its implied branch reaches — e.g. a positioning template like "the Vercel/Railway highest standard" decides a whole stance for the user)}}. Rules: entry required and must exist; every next target must exist; references and cycles are rejected at submit; unreachable questions are never asked. First-try checklist (the five most-rejected specs): (1) every id named in any next (question- or option-level) must exist in questions — re-check every next target after trimming or renaming questions, dangling references are the #1 rejection; (2) question-level next may be an id, an id list, or null (= no follow-up), never required; (3) the branch graph must be acyclic; (4) option keys unique per question; (5) a quick template's answers may name only questions its own selections actually reach, using option keys that exist on that question — multiple keys, or keys combined with custom text, only on multiSelect questions. Validation errors name the exact offending spot and, for dangling references, the nearest defined id and the id roster — one retry fixes it. Each option's insight should embed engineering judgment (what great looks like / tradeoff / (today) state). The result carries path (order actually asked), answers ({id, selected: [{key,label}], custom?}), skipped; store Q&A verbatim as numbered QA records and derive follow-ups from them. Next to "Start" the user can also press Quick/Reroll/Push/Discuss — all four return normally (not errors): quick = the user picks one of the quick templates, arrives as a normal answered result, no extra handling needed; reroll/push/discuss return those outcomes with an instruction field: reroll = rewrite the same topic in cleaner, better-spoken prose and call again; push = do DEEP web research first (minimum 12 competitors, open-source repos, .refs/ curated research) then expand and deepen the survey with evidence-grounded insights and call again; discuss = talk it through in chat first, do not immediately re-call.
-Builder for big researched surveys (use INSTEAD of one giant ask_survey payload): survey_draft_set op=begin locks a full-frame skeleton (entry, ids, at least 5 option keys per option-bearing question — labels/prompts may be TODO: stubs — branch wiring validated on the spot); research (codebase, web, 9-12 competitors, docs) interleaved with survey_draft_set op=patch — at most 3 questions per call, prose only (prompt/header/detail/options label+description+insight+sources; branch wiring belongs to op=structure, allowed while the draft is under the question cap, each use bumps the revision); survey_draft_get returns the required-field checklist (per option: label, description, insight, at least 1 source are REQUIRED — get lists every gap); survey_draft_launch refuses anything still TODO:, then starts the wizard — reroll/push/discuss reopen the draft for editing instead of a from-scratch rebuild. Drafts persist as files (.dsh/survey-drafts/<slug>.json in the workspace; old drafts remain as reference), one active draft per conversation, a tracker-style card shows progress in the GUI, nothing ever expires, and every settled survey is recorded.`
-
-const ANNOUNCEMENT_ZH = `本机已安装 dsh-rich-questions 插件（富问题/问卷系统）：它把 ask_user_question 扩展为可分支的 ask_survey。需要向用户收集结构化意见/预期/验收状态且满足任一条件时用 ask_survey：≥4 个问题的问卷、超过 10 题的大问卷、问题间有分支（前题答案决定后题）、选项需要超过一句的解释（hover 洞察、来源、tradeoff）。1-3 个简单确认/单选题仍用 ask_user_question。
-语言规则：问卷全部用户可见内容（title、intro、prompt、选项 label/description/insight、quick 模板文案）一律使用用户当前聊天所用的语言——英文对话写英文，中文对话写中文，其他语言同理。整份问卷保持同一语言，不要混用；选项 key 无论如何都用短 ASCII 字母（a、b、c…）。
-深度基准：富问卷要对得起它的形态。真正的预期对齐/验收/范围调研默认 10-30 题——「≥4 题」只是入场门槛，不是目标。凡是「一个答案会改变后面该问什么」的地方都要分支：超过 6 题的问卷至少要有 2-3 个真实分支点（选项级 next 路由到不同的题目段），路径后面可以再汇合。凡带选项的问题至少 5 个选项（键 a–e，目标 5-8 个）——必须是真正有立场差异、读者可以反对的选项，绝不凑数；自由文本输入行单独存在，不计入选项数。涉及判断的选项都要有真正的 insight（什么是好 / tradeoff / (today) 现状）；架构或流程类选项配 diagram；用户可能已知道自己想要什么时，配 3-6 个 quick 模板。扁平无分支的 4 题问卷就是失误——如果确实只需要 1-3 个简单问题，直接用 ask_user_question。
-读者优先准则（owner 强制；适用于你编写的每一份问卷，以及每次 reroll/push 重写）：为正在做决定的用户而写——平实、直接、零废话。绝不假设读者知道你在指什么：把显而易见的说出来、首次出现的术语给定义、每个问题都锚定到读者的处境与「这个答案会改变什么」。问题自包含（硬性规则）：每个问题必须让没跟上对话的读者也能独立看懂——禁止裸概念。prompt 里出现的机制（宽限期、fencing、缓存层等）必须在同一句里给出定义、说明它在读者环境里的位置、以及这个答案会改变什么。反例：「宽限期应该多长？」；正例：「当两个会话都能写同一状态时，旧会话会被 fence（写入开始被拒绝），但会短暂保留写权限（宽限期）让进行中的命令跑完——这个窗口应该多长？太短会中途丢弃工作，太长会回到双写混乱。」较长的背景放 detail（markdown），绝不把问题压缩成模糊。具体而有洞见——每个论断用可用的最强具体形式：数字、实例或具名对比，绝不悬空形容词。Obvious，not oblivious（把话说明显，而不是想当然）。硬性要求：结构永远完整——导语页交代（这是什么、为什么现在问、答案会怎样使用、大约多长）、header 分组、每个选项必有 description 一行；每个判断型选项的 insight 必含 what-great-looks-like + tradeoff + (today) + 一个具体抓手；禁止：空泛抽象选项（每个选项都要有读者可以反对的立场）、单边推销式 insight、无 insight 的判断选项；几乎所有问卷都配 quick 模板，且模板是具名立场（「Vercel 级打磨 + DX」，绝不用「方案一」）。
-ask_survey 编写契约：参数 {survey: {title?, intro?(markdown 首屏), entry(首个问题 id), questions: {qid: {prompt, header?(分组), detail?(markdown 上下文), multiSelect?, allowCustom?(默认 true), skippable?(默认 true), options: [{key(任意字符串，建议单字母 a–z，多选可更多，需含 other 时用 key "other"), label, description?(一句话), insight?(markdown ~6 行：what great looks like / tradeoff / (today) 现状), diagram?(可选，紧凑 Mermaid 图，节点要少——用户点击「?」旁的分支图标展开，面板不滚动，图必须小到能整个塞进去), sources?(链接或引用), recommended?(推荐项放第一个), next?(选它后跟随的问题 id 或 id 数组；null=该分支结束；省略=用题目级 next)}], next?(题目级默认跟随：跳过/自由文本/选项未声明 next 时使用)}}, quick?(最多 6 个「一键模板」，键用 a–f 而非仅 a–d：[{key, label, description?, insight?, diagram?, recommended?, answers: {qid: {selected?:[key,...], custom?}}}]。用户在首屏点「快速」后看到这最多 6 个模板而不逐题作答；选中一个即用其 answers 直接套满全部题目并提交，因此每个模板的 answers 要连贯自洽、覆盖它所隐含分支触达的题目——例如"对标 Vercel/Railway 的最高标准"这类定位型模板，替用户把一整套倾向性答案都决定好)}}。规则：entry 必填且必须存在；所有 next 指向的问题必须存在；引用与环会在提交时被拒绝；未被分支到达的问题不会被问。首试自检（校验最常见的五种拒稿）：① 任何 next（题目级或选项级）指向的 id 必须存在于 questions——删题/改题名后务必逐个复查 next 目标，悬空引用是第一大拒稿原因；② 题目级 next 可以是 id、id 数组或 null（=无后续，等同省略），永远非必填；③ 分支图必须无环；④ 选项 key 每题唯一；⑤ quick 模板的 answers 只能引用其自身选择实际可达的题目、且 selected 必须是该题存在的选项 key——多个 key 或 key+custom 组合仅限 multiSelect 题。校验错误会精确指出出错位置，悬空引用还会给出最接近的已有 id 与全部 id 清单，一次重试即可修复。每个选项的 insight 应内嵌工程判断（什么是好、tradeoff、(today) 现状）。作答结果含 path（实际问到的问题顺序）、answers（每题 {id, selected:[{key,label}], custom?}）、skipped；请把 Q&A 逐字存为编号 QA 记录并据此推导后续条目。用户在问卷首屏「开始」按钮旁还可点「快速/重掷/深挖/讨论」——四者都会让 ask_survey 正常返回（非报错）：快速由用户直接从 quick 模板中选 1 个提交，走的是普通 answered 结果，你无需额外处理；reroll/push/discuss 的 outcome 分别为 reroll/push/discuss 并附 instruction 字段：reroll=同主题用更简洁地道的表达（跟随用户语言）重写后重新调用；push=先做深度网络调研（最少 12 个竞品/同类实现、GitHub 开源仓库、.refs/ 目录已有研究）再据此扩展加深问卷后重新调用——洞察必须引用具体证据；discuss=先在对话里讨论，不要立刻重新调用。
-大型调研问卷请用构建器（而不是一次性巨型 ask_survey）：survey_draft_set op=begin 锁骨架（entry、题目 id、每题 ≥5 个选项 key——label/prompt 可为 TODO: 占位——分支结构即时校验）；随后边调研（代码库/网络/9-12 竞品/文档）边用 op=patch 补内容（每次 ≤3 题，仅文字字段：prompt/header/detail/选项 label+description+insight+sources；分支改动走 op=structure，题数上限内允许，每次 revision+1）；survey_draft_get 返回必填项清单（每选项 label/description/insight/≥1 source 均必填，get 会列出全部缺口）；survey_draft_launch 拒绝任何 TODO: 残留，通过后启动向导——reroll/push/discuss 会把草稿转为可编辑状态而非推倒重来。草稿持久化为文件（工作区 .dsh/survey-drafts/<slug>.json，旧草稿留作参考），每会话一个活跃草稿，tracker 式卡片展示进度，永不过期，每份结束的问卷都会留档。`
-
-/** Locale-selected announcement: shipping both halves cost every session
- *  (including subagent children) ~4k tokens for a translation it never reads. */
 export const ANNOUNCEMENT = (() => {
   const locale = process.env.LANG ?? process.env.LC_ALL ?? ''
   return /^zh/i.test(locale) ? ANNOUNCEMENT_ZH : ANNOUNCEMENT_EN
@@ -99,14 +107,17 @@ export const ANNOUNCEMENT = (() => {
 /**
  * Instruction text returned (not thrown) for the three intro-page pre-flight
  * actions offered next to "Start". Each resolves the tool call normally so
- * the model reads it as the next step, not a failure.
+ * the model reads it as the next step, not a failure. The guarantees are
+ * deliberately quantified: a Reroll escalates (never merely rewords) and a
+ * Push doubles the depth on researched evidence that lands as reusable
+ * artifacts under .docs/ and .refs/.
  */
 const PREFLIGHT_INSTRUCTIONS = {
-  reroll: 'The user hit "Reroll" before starting: they want the same survey topic, branching intent, and structure, rewritten from scratch under the reader-first doctrine — same bones, obvious flesh: define every term on first use, add concrete examples and named comparisons, shorten sentences, anchor each question to the user\'s situation and what their answer changes, plain-spoken and direct (in the language the user is chatting in). No jargon, no filler, no floating adjectives. Call ask_survey again with the rewritten spec; do not ask the user anything first.',
-  push: 'The user hit "Push" before starting: they want the survey pushed deeper — both deeper AND broader, grounded in RESEARCH, not intuition. Before calling ask_survey again, you MUST do ALL of the following: (1) AGGRESSIVE web research — search for competitors and comparable products solving this exact problem; find and study a MINIMUM of 12 competitors or comparable implementations. For each, capture: what they do differently, their architecture/approach, their key tradeoff, and what they got right that we have not. (2) Research OPEN-SOURCE repositories doing similar things — search GitHub and code hosting for projects in this space; read their READMEs, issue trackers, and design docs for real patterns and lessons learned. (3) Read the workspace .refs/ directory if it exists — it contains curated research references; use them and note what additional research is still needed. (4) Pull in any additional local context that sharpens the questions. Then expand and sharpen the survey: more thorough questions and options, insights grounded in SPECIFIC evidence from what you found (numbers, named comparisons, real patterns from the 12+ competitors), and new branch dimensions where they add precision — all while keeping full reader-first structure. Your survey options should read like they were written by someone who has studied the entire competitive landscape, not someone guessing. Call ask_survey again with the expanded, better-informed spec; do not ask the user anything first.',
-  discuss: 'The user hit "Discuss" before starting: they do not want the form yet. Do not call ask_survey again immediately. Instead open a normal conversational discussion in chat about the survey\'s subject — ask clarifying questions, share your thinking — and only propose calling ask_survey again once the discussion converges on a clear direction.',
-  superseded: 'A newer ask_survey call from the same session superseded this survey before the user answered it. Treat this call as cancelled: continue with whatever the newer survey returns; do not re-issue this one unless the user asks.',
-  stale: 'This survey expired unanswered after 30 minutes and was cancelled. If the questions still matter, re-issue ask_survey (ideally fewer or sharper questions); otherwise continue without it.',
+  reroll: "The user hit “Reroll” before answering: they want the same survey — topic, structure, intent — rewritten cleaner AND escalated. Do all of: (1) fix every quality-bar gap v1 had: missing or thin Promise/Price/Present handles, vague options, a missing branch dimension, an intro that fails to orient; (2) make every prompt fully self-contained; (3) NEVER shrink — option count, branching, and insight density stay equal or grow; (4) plain-spoken, zero jargon, in the user’s chat language. Then re-issue without asking anything first: small surveys directly via ask_survey; large surveys re-enter the builder loop (survey_draft_set op=structure or op=patch → survey_draft_get → survey_draft_launch).",
+  push: "The user hit “Push” before answering: they want the survey pushed deeper on the strength of RESEARCH, not intuition — and the research must land as reusable artifacts, not vanish inside this tool call. Do ALL of: (1) study a MINIMUM of 12 competitors or comparable implementations for this exact problem — twice the standing 9-12 bar; for each capture what it does differently, its approach, its key tradeoff, and what it got right that we have not. (2) Write the findings down: condensed digest → .docs/digest/<topic>.md; deeper findings → .docs/research/; captured competitor UI/API traces → .docs/research/rips/; downloaded competitor source → .refs/. Research that is not written down did not happen. (3) Re-author at GUARANTEED DOUBLE DEPTH: at least 2× the question count or equivalent branch depth (10→20+), every new option carrying evidence-cited Promise/Price/Present insights drawn from the digest, and new branch dimensions wherever the research found them. (4) Re-issue without asking anything first: small surveys via ask_survey; large surveys re-enter the builder loop (structure/patch → get → launch).",
+  discuss: "The user hit “Discuss” before answering: they do not want the form yet. Do not call ask_survey again immediately. Open a normal conversation about the survey’s subject — ask clarifying questions, share your thinking, converge on direction — and only propose the survey again once the discussion settles.",
+  superseded: "A newer ask_survey call from the same session superseded this survey before the user answered it. Treat this call as cancelled: continue with whatever the newer survey returns; do not re-issue this one unless the user asks.",
+  stale: "This survey ended unanswered and was cancelled. If the questions still matter, re-issue ask_survey sharper; otherwise continue without it.",
 }
 
 class SurveyError extends Error {
@@ -402,6 +413,13 @@ function requireLiveRootAgent(ctx, exec) {
   return agent
 }
 
+/**
+ * The result-time handling contract, delivered WITH the answers — the exact
+ * moment the model decides what to do with the user's input. Restates THE
+ * FEEL from the announcement where it matters most.
+ */
+const RESULT_HANDLING = 'Open your next turn by mirroring the user’s stance in one line before acting on these answers (“You chose X over Y because Z, so I will…”). Trace each landed decision back to its answer as work proceeds. Never re-ask what this survey already answered; the justifications carry intent — honor them before overriding anything.'
+
 /** Shape an answered survey result for the model: labels resolved, answered/skipped split. */
 function shapeAnswered(spec, result) {
   const path = result.path
@@ -428,6 +446,7 @@ function shapeAnswered(spec, result) {
     path,
     answers: answered,
     skipped,
+    handling: RESULT_HANDLING,
   }
 }
 
@@ -441,7 +460,7 @@ function surveyToolDefinition(ctx, service) {
       key: { type: 'string', description: 'Stable option key echoed in the answer. Use short letters/digits (a, b, c, ...; more for multi-select); "other" is the conventional free-text key.' },
       label: { type: 'string', description: 'Short user-facing option label.' },
       description: { type: 'string', description: 'One sentence shown under the label (always visible).' },
-      insight: { type: 'string', description: 'Markdown revealed on hover (~6 lines): what great looks like, the tradeoff, "(today)" current state, caveats.' },
+      insight: { type: 'string', description: 'Markdown revealed on hover (~6 lines), structured as a triple — Promise: what choosing this sets up when done right; Price: what it costs or risks; Present: where things stand today, with at least one concrete handle (a number, a name, a version, a date).' },
       diagram: { type: 'string', description: 'Optional compact Mermaid diagram (flowchart/graph, a handful of nodes) shown when the user clicks the branch icon next to the insight "?" instead of the text insight. Keep it small — the panel does not scroll, so the whole diagram must fit.' },
       sources: { type: 'array', items: { type: 'string' }, description: 'References or links surfaced in the hover insight.' },
       recommended: { type: 'boolean', description: 'Mark this option as the recommendation (badge); list it first.' },
@@ -471,7 +490,7 @@ function surveyToolDefinition(ctx, service) {
       key: { type: 'string', description: 'Stable quick-template key. Use a-f (up to 6 templates), not just a-d.' },
       label: { type: 'string', description: 'Short label for the template, e.g. "Ship like Vercel/Railway: polish + DX first".' },
       description: { type: 'string', description: 'One sentence shown under the label (always visible).' },
-      insight: { type: 'string', description: 'Markdown revealed via the "?" button (~6 lines): who this template is for, what it optimizes for, the tradeoff.' },
+      insight: { type: 'string', description: 'Markdown revealed via the "?" button (~6 lines), structured as a triple — Promise: what this template sets up; Price: its tradeoff; Present: who it is for today.' },
       diagram: { type: 'string', description: 'Optional compact Mermaid diagram (kept small, no scrolling) visualizing the resulting decision path, shown via the branch icon.' },
       sources: { type: 'array', items: { type: 'string' } },
       recommended: { type: 'boolean', description: 'Mark this template as the recommendation (badge); list it first.' },
@@ -506,7 +525,7 @@ function surveyToolDefinition(ctx, service) {
   }
   return {
     name: 'ask_survey',
-    description: 'Ask the user a rich branching survey/questionnaire: up to 150 questions, arbitrary option keys, per-option hover insights with sources, multi-select, free-text answers, and per-option branching (each option declares which questions follow it). Use for structured expectation/acceptance/alignment questionnaires, anything with more than ~3 questions, or any question set where the answer to one question determines which questions come next. For 1-3 simple confirmation/choice questions use ask_user_question instead. The survey pauses until the user completes it in the Web GUI; the result carries the ordered path actually asked, every answer (keys + labels), and the skipped list. LANGUAGE: author all user-facing survey content (title, intro, prompts, option labels/descriptions/insights, quick-template copy) in the language the user is currently chatting in — English conversation → English, 中文 → 中文, any other language → that language; one language consistently across the whole survey, with option keys kept as short ASCII letters regardless. DEPTH: for real expectation/alignment/scoping work default to 10-30 questions (the 4-question threshold is the entry condition, not the target), with at least 2-3 genuine branch points in any survey over 6 questions, AT LEAST 5 options per option-bearing question (keys a-e, aim 5-8, genuinely distinct stances — the free-text row is separate), insights on every judgment-bearing option, and quick templates whenever the user might already know their destination — a flat 4-question spec is a miss; if only 1-3 flat questions are truly needed, use ask_user_question instead. READER-FIRST DOCTRINE (mandatory for all survey content and every reroll/push rewrite): write for the deciding user, plain-spoken and direct; never assume the reader knows what you are referring to — spell out the obvious, define every term on first use, anchor each question to the reader\'s situation and what their answer changes; every question prompt is SELF-CONTAINED: define terms where they are used, say where they apply and what the answer changes — no naked concept name-drops (a prompt like "How long does the grace period last?" is a violation; define the mechanism in the same prompt), with longer backstory going into detail; strongest-available specificity per claim (a number, a concrete example, or a named comparison — never a floating adjective); full structure always (orienting intro: what/why/what-happens-with-answers/how long; header grouping; a description line on every option); every judgment option\'s insight carries what-great-looks-like + the tradeoff + (today) + one concrete handle; banned: vague-abstraction options, one-sided selling insights, judgment options without insights; ship quick templates as named stances on nearly every survey. FIRST-TRY CHECKLIST — the failures validation rejects most often: (1) every id named in any `next` (question- or option-level) must be a key of `survey.questions`; after trimming or renaming questions, re-check every next target — a dangling reference is the #1 rejected spec. (2) Question-level `next` may be an id, an id list, or null (= no follow-up); it is never required. (3) The branch graph must be acyclic. (4) Option keys are unique per question. (5) Each `quick` template\'s `answers` may name only questions its own selections actually reach, using option keys that exist on that question; multiple keys, or keys combined with custom text, are only valid on multiSelect questions. Validation errors name the exact offending spot and, for dangling references, suggest the nearest defined id and list the id roster — fix and re-issue in one retry. If a call errors with "survey must be an object", your own arguments JSON was cut off or malformed before this tool received it (the harness forwards bad tool-call JSON as text, so the "survey" field never arrived); the error text from this tool tells you exactly what was wrong — re-send a SMALLER payload (trim prompt/insight/description strings and options, drop the quick templates) or split the survey into two consecutive calls; never resend the identical payload.',
+    description: 'Ask the user a rich branching survey/questionnaire: up to 150 questions, per-option branching (each option declares which questions follow), hover insights with sources, multi-select, free-text answers, and up to 6 one-click quick templates. Use for structured expectation/acceptance/alignment work — 4+ questions, or anything where one answer changes what comes next; keep ask_user_question for 1-3 simple confirmations; 10+ questions or research-backed surveys go through the BUILDER loop (survey_draft_set → survey_draft_get → survey_draft_launch), never one giant call. QUALITY BAR, at the moment you author: self-contained prompts (define every term in place and say what the answer changes); at least 5 stance-differentiated options per question (never filler, never a letter with no stance); every judgment option insight reads Promise / Price / Present — Promise: what choosing this sets up when done right; Price: what it costs or risks; Present: where things stand today, with one concrete handle (a number, a name, a version). Branch wherever an answer should change what is asked next, and always open with an orienting intro: what this decides, why now, what happens with the answers, how long. All user-facing copy in the user chat language; option keys stay short ASCII. RESULTS HANDLING: when the answered result returns, open your next turn by mirroring the user stance in one line (You chose X over Y because Z, so I will...), trace decisions to answers as work lands, and never re-ask what a survey already answered. The survey pauses until the user completes it in the Web GUI; the result carries the ordered path actually asked, every answer (keys + labels), and the skipped list.',
     parameters: {
       type: 'object',
       required: ['survey'],
@@ -541,6 +560,7 @@ function surveyToolDefinition(ctx, service) {
         required: ['outcome'],
         properties: {
           outcome: { type: 'string', enum: ['answered', 'reroll', 'push', 'discuss'], description: '"answered" carries path/answers/skipped. "reroll"/"push"/"discuss" are pre-flight redirects picked next to "Start" before any question was answered — each carries an instruction telling you what to do next.' },
+          handling: { type: 'string', description: 'Present on outcome "answered": the human-handling contract — mirror the user’s stance back in one line, trace decisions to answers, never re-ask what this survey answered.' },
           title: { type: 'string' },
           instruction: { type: 'string', description: 'Present only for "reroll"/"push"/"discuss": what the user wants instead of proceeding, and what to do about it.' },
           path: { type: 'array', items: { type: 'string' }, description: 'Question ids actually asked, in order (outcome "answered" only).' },
@@ -653,7 +673,7 @@ function draftToolDefinitions(ctx, service, structureQuestionCap) {
   })
   const setTool = {
     name: 'survey_draft_set',
-    description: 'Builder write. op=begin: lock a skeleton {title, survey:{entry, questions}} — ids, >=5 option keys per option-bearing question (labels/prompts may be "TODO:" stubs), branch wiring; validated on the spot; the draft title becomes the survey title unless survey.title is set. op=patch: flesh out at most 3 questions per call with prose only (prompt/header/detail/multiSelect/allowCustom/skippable/options label+description+insight+sources — option "next" fields are structural and ignored), and/or set draft-level fields: intro (markdown first page) and quick (the up-to-6 one-click templates, authored LAST over finished questions — validated immediately incl. the two-way coverage rule). op=structure: replace the whole graph (allowed while under the question cap; bumps revision). op=discard: retire the active draft (file remains as reference). Drafts are persistent files; one active draft per conversation; old drafts remain.',
+    description: 'Builder write, and the RESEARCH-FIRST LOOP in tool form: study 9-12 comparable systems BEFORE locking structure (findings to .docs/research/, condensed digests to .docs/digest/, captured competitor UI/API traces to .docs/research/rips/, downloaded competitor source to .refs/ — research that is not written down did not happen). op=begin: lock the skeleton {title, survey:{entry, questions}} — ids, >=5 option keys per option-bearing question (labels/prompts may be TODO stubs), branch wiring validated on the spot; the draft title defaults the survey title. op=patch: flesh out at most 3 questions per call — question fields and option fields MERGE per-field (send only what changes; safe to add sources to already-written options), prose only (prompt/header/detail/multiSelect/allowCustom/skippable/options label+description+insight+sources — option next fields are structural and ignored), plus draft-level intro and quick (authored LAST over finished questions; validated immediately incl. the two-way coverage rule). op=structure: replace the whole graph while under the question cap; bumps revision — use it when research reshapes the skeleton or options must be reordered/removed. op=discard: retire the active draft. Loop [research → patch] until survey_draft_get reports zero gaps, then launch. One active draft per conversation; drafts persist as workspace files; old drafts remain.',
     parameters: {
       type: 'object',
       required: ['op'],
@@ -663,7 +683,7 @@ function draftToolDefinitions(ctx, service, structureQuestionCap) {
         title: { type: 'string', description: 'op=begin: survey title; seeds the draft slug and defaults the survey title.' },
         survey: { type: 'object', description: 'op=begin/structure: the survey skeleton {title?, intro?, entry, questions} — same shape ask_survey takes; prompts/labels may be "TODO:" stubs, structure must validate.' },
         slug: { type: 'string', description: 'op=patch/structure/discard: target draft; omit to use the conversation active draft.' },
-        questions: { type: 'object', description: 'op=patch: map of question id -> content patch {prompt?, header?, detail?, multiSelect?, allowCustom?, skippable?, options?} (options replaced wholesale when present).' },
+        questions: { type: 'object', description: 'op=patch: map of question id -> content patch {prompt?, header?, detail?, multiSelect?, allowCustom?, skippable?, options?}. Option patches MERGE per-field against the option at the same index — send only what changes, lists may be partial (untouched tail options survive); the structure op replaces options wholesale.' },
         intro: { type: 'string', description: 'op=patch: set the survey intro (markdown first page).' },
         quick: { type: 'array', maxItems: 6, items: { type: 'object' }, description: 'op=patch: replace the quick templates — same shape as ask_survey quick [{key, label, description?, insight?, recommended?, answers: {qid: {selected}}}]. Author them last, over finished questions.' },
       },
@@ -706,7 +726,7 @@ function draftToolDefinitions(ctx, service, structureQuestionCap) {
 
   const getTool = {
     name: 'survey_draft_get',
-    description: 'Builder read: the draft (by slug, else the conversation active draft) with the required-field checklist — every option needs label, description, insight, and at least 1 source; every question needs a non-TODO prompt. Lists exactly what is missing before survey_draft_launch will pass.',
+    description: 'Builder read and the LAUNCH GATE: returns the draft (by slug, else the conversation active draft) with the required-field checklist — every option needs label, description, insight (Promise / Price / Present), and at least 1 source; every question needs a non-TODO self-contained prompt. Loop [research → survey_draft_set op=patch] until this reports zero gaps; only then call survey_draft_launch.',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -738,7 +758,7 @@ function draftToolDefinitions(ctx, service, structureQuestionCap) {
 
   const launchTool = {
     name: 'survey_draft_launch',
-    description: 'Launch the finished draft as the live wizard: validates structure, refuses any TODO: stub or missing required field (the checklist from survey_draft_get), then starts the wizard in the composer seat exactly like ask_survey. On reroll/push/discuss the draft is reopened for editing instead of discarded.',
+    description: 'Launch the finished draft as the live wizard: validates structure, refuses any TODO stub or missing required field (the survey_draft_get checklist must be clean first — the gate is the loop exit), then starts the wizard in the composer seat exactly like ask_survey. On reroll/push/discuss the draft reopens for editing and the model re-enters the loop — deeper each time — instead of rebuilding from scratch. Answered results carry the handling contract: mirror the user stance in one line, trace decisions to answers, never re-ask.',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -781,6 +801,109 @@ function draftToolDefinitions(ctx, service, structureQuestionCap) {
   return [setTool, getTool, launchTool]
 }
 
+/**
+ * The memory cluster: a read-only reader over settled survey records
+ * (pluginHome()/surveys/<surveyId>.json — every ended survey persists one,
+ * operator rule: nothing ends silently). This is the no-re-asking
+ * doctrine's machinery: call it BEFORE authoring any survey, cite what you
+ * found, and never re-ask an answered question. Read-only by design — the
+ * memory-doing-harm guard: records surface with their dates so stale
+ * stances read as stale, and nothing injects anywhere automatically.
+ * @param ctx - plugin context (agents registry for the live-root check).
+ * @returns the survey_records tool definition.
+ */
+function recordsToolDefinition(ctx) {
+  return {
+    name: 'survey_records',
+    description: 'Memory: read the settled-survey record store (every answered survey this machine has run, newest first) BEFORE authoring or answering-planning any new survey. Each record carries its date, title, the questions asked (prompts), the chosen options (labels), free-text answers, and the user’s written justifications. Search with a query across titles, prompts, chosen labels, custom answers, and justifications; matched records return whole. Cite what you find (e.g. “per your 2026-08-28 survey on X you chose Y because Z”) and NEVER re-ask a question a record already answers — re-asking says nobody was listening. Records age: prefer recent stances, and re-confirm anything older than the current conversation when it matters.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        query: { type: 'string', description: 'Case-insensitive substring matched across titles, prompts, chosen option labels, free-text answers, and justifications. Omit to list the most recent records.' },
+        limit: { type: 'number', description: 'Maximum records returned (default 8, max 25).' },
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          count: { type: 'integer' },
+          records: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                surveyId: { type: 'string' },
+                settledAt: { type: 'string' },
+                title: { type: 'string' },
+                outcome: { type: 'string' },
+                answers: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      id: { type: 'string' },
+                      prompt: { type: 'string' },
+                      selected: { type: 'array', items: { type: 'string' } },
+                      custom: { type: 'string' },
+                      justifications: { type: 'object' },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
+    },
+    async execute(args, exec) {
+      requireLiveRootAgent(ctx, exec)
+      const limit = Number.isFinite(args.limit) ? Math.min(Math.max(Math.trunc(args.limit), 1), 25) : 8
+      const query = typeof args.query === 'string' && args.query.trim() !== '' ? args.query.toLowerCase() : undefined
+      const dir = join(pluginHome(), 'surveys')
+      const names = await readdir(dir).catch(() => [])
+      const records = []
+      for (const name of names) {
+        if (name.endsWith('.json') === false) continue
+        try {
+          const raw = JSON.parse(await readFile(join(dir, name), 'utf8'))
+          if (raw === null || typeof raw !== 'object' || Array.isArray(raw.answers) === false) continue
+          const questions = raw.spec?.questions ?? {}
+          const answers = raw.answers.map((answer) => ({
+            id: answer.id,
+            prompt: questions[answer.id]?.prompt ?? answer.id,
+            selected: answer.selected.map((key) => questions[answer.id]?.options?.find((option) => option.key === key)?.label ?? key),
+            ...(answer.custom !== undefined ? { custom: answer.custom } : {}),
+            ...(answer.justifications !== undefined ? { justifications: answer.justifications } : {}),
+          }))
+          records.push({
+            surveyId: raw.surveyId,
+            // Null (not dropped) for a hand-damaged record: the date is the
+            // staleness signal, so surface its absence instead of hiding it.
+            settledAt: Number.isFinite(raw.settledAt) ? new Date(raw.settledAt).toISOString() : null,
+            outcome: raw.outcome,
+            ...(typeof raw.title === 'string' ? { title: raw.title } : {}),
+            answers,
+          })
+        } catch { /* one torn record must not blind the reader */ }
+      }
+      records.sort((a, b) => (b.settledAt ?? '').localeCompare(a.settledAt ?? ''))
+      const matches = query === undefined
+        ? records
+        : records.filter((record) => {
+          const haystack = [
+            record.title ?? '',
+            ...record.answers.flatMap((answer) => [answer.prompt, ...answer.selected, answer.custom ?? '', ...Object.values(answer.justifications ?? {})]),
+          ].join('\n').toLowerCase()
+          return haystack.includes(query)
+        })
+      return { count: matches.length, records: matches.slice(0, limit) }
+    },
+  }
+}
+
 export function apply(ctx, config = {}) {
   const service = new SurveyHostService()
   const structureQuestionCap = Number.isFinite(config?.structureQuestionCap) ? config.structureQuestionCap : 40
@@ -804,4 +927,5 @@ export function apply(ctx, config = {}) {
   })
   ctx.tools.register(surveyToolDefinition(ctx, service))
   for (const definition of draftToolDefinitions(ctx, service, structureQuestionCap)) ctx.tools.register(definition)
+  ctx.tools.register(recordsToolDefinition(ctx))
 }

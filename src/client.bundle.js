@@ -78,7 +78,11 @@ window.__ModuleLoader__.load({
 			const draftsBySlug = new Map();
 			const listeners = new Set();
 			let started = false;
+			// Monotonic tick for useSyncExternalStore subscribers: a stable
+			// primitive snapshot that changes exactly when notify() fires.
+			let version = 0;
 			function notify() {
+				version += 1;
 				for (const listener of [...listeners]) listener();
 			}
 			function applyState(surveys) {
@@ -175,9 +179,10 @@ window.__ModuleLoader__.load({
 			return {
 				get(sessionId) { return bySession.get(sessionId); },
 				/**
-				 * The conversation's active draft frame (tracker card), or
-				 * undefined. Launched/discarded drafts never claim the seat:
-				 * launched means the wizard owns it, discarded is gone.
+				 * The conversation's active draft frame (builder card), or
+				 * undefined. Launched/discarded drafts never render the card:
+				 * launched means the wizard owns the composer, discarded is
+				 * gone.
 				 */
 				draftFor(sessionId) {
 					let best;
@@ -204,6 +209,8 @@ window.__ModuleLoader__.load({
 					listeners.add(listener);
 					return () => listeners.delete(listener);
 				},
+				/** Snapshot tick for useSyncExternalStore — stable between notifies. */
+				getVersion() { return version; },
 				async respond(surveyId, action) {
 					const res = await fetch(`${API}/action`, {
 						method: "POST",
@@ -225,8 +232,8 @@ window.__ModuleLoader__.load({
 			"option.recommended": "推荐",
 			"sources.title": "来源",
 			"insight.expand": "查看详情",
-			"justify.hint": "说明理由——为什么选这个选项（agent 能看到）",
-			"justify.placeholder": "为什么选这个？",
+			"justify.hint": "写下你的理由——它会随答案一起交给 agent，agent 必须兑现它",
+			"justify.placeholder": "为什么选这个？（agent 会读到并兑现）",
 			"justify.line": "理由：",
 			"insight.collapse": "收起详情",
 			"diagram.view": "查看流程图",
@@ -241,7 +248,7 @@ window.__ModuleLoader__.load({
 			"draft.missing": "个必填缺口",
 			"draft.revision": "结构版本",
 			"draft.dismiss": "隐藏草稿卡片",
-			"draft.hint": "正在按构建器流程构建这份问卷（调研 + 小步补全）；构建完成会自动切换为问卷向导。",
+			"draft.hint": "正在按构建器流程构建这份问卷（调研 + 小步补全）；构建完成会自动切换为问卷向导。聊天输入不受影响。",
 			"draft.status.building": "构建中",
 			"draft.status.launched": "已启动",
 			"draft.status.reopened": "已重开",
@@ -280,8 +287,8 @@ window.__ModuleLoader__.load({
 			"option.recommended": "Recommended",
 			"sources.title": "Sources",
 			"insight.expand": "View details",
-			"justify.hint": "Justify — why you're choosing this option (the agent sees it)",
-			"justify.placeholder": "Why this option?",
+			"justify.hint": "Add your why — it rides the answer and the agent must honor it",
+			"justify.placeholder": "Why this one? (the agent reads and honors it)",
 			"justify.line": "why: ",
 			"insight.collapse": "Hide details",
 			"diagram.view": "View diagram",
@@ -296,7 +303,7 @@ window.__ModuleLoader__.load({
 			"draft.missing": "required fields missing",
 			"draft.revision": "rev",
 			"draft.dismiss": "Hide draft card",
-			"draft.hint": "This survey is being built through the builder lifecycle (research + small patches); the wizard takes this seat automatically on launch.",
+			"draft.hint": "This survey is being built through the builder lifecycle (research + small patches); the wizard takes over the composer automatically on launch. The chat input stays usable meanwhile.",
 			"draft.status.building": "Building",
 			"draft.status.launched": "Launched",
 			"draft.status.reopened": "Reopened",
@@ -397,7 +404,7 @@ window.__ModuleLoader__.load({
 .rq-headingBlock{min-width:0}
 .rq-eyebrow{color:var(--dsw-alias-label-tertiary);margin-bottom:5px;font-size:11px;line-height:16px;display:flex;align-items:center;gap:6px;min-height:16px}
 .rq-chip{background:var(--dsw-alias-markdown-code-block);color:var(--dsw-alias-label-secondary);border-radius:6px;padding:0 6px;font-size:11px;line-height:16px}
-.rq-title{margin:0;font-size:16px;font-weight:500;line-height:22px;overflow-wrap:anywhere}
+.rq-title{margin:0;font-size:16px;font-weight:500;line-height:22px;letter-spacing:-0.01em;overflow-wrap:anywhere}
 .rq-headerActions{flex-shrink:0;align-items:center;gap:4px;display:flex}
 .rq-iconButton{width:24px;height:24px;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:999px;place-items:center;padding:0;display:grid}
 .rq-iconButton:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
@@ -411,7 +418,7 @@ is a 1px border-bottom divider (never a stroke-as-container); the card's
 overflow:hidden clips the rounded corners. Rows keep their own inner padding
 so content aligns with the header/footer text. */
 .rq-options{flex-direction:column;gap:0;display:flex}
-.rq-opt{width:100%;text-align:left;cursor:pointer;background:0 0;border:none;border-bottom:1px solid var(--dsw-alias-border-l2-darkmode-thin);border-radius:0;padding:10px 16px;display:flex;gap:10px;align-items:flex-start;font:inherit;color:inherit;transition:background-color 120ms ease;user-select:none}
+.rq-opt{width:100%;text-align:left;cursor:pointer;background:0 0;border:none;border-bottom:1px solid var(--dsw-alias-border-l2-darkmode-thin);border-radius:0;padding:10px 16px;display:flex;gap:10px;align-items:flex-start;font:inherit;color:inherit;transition:background-color 150ms cubic-bezier(0.2,0.7,0.2,1);user-select:none}
 .rq-options .rq-opt:last-child{border-bottom:none}
 .rq-opt:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .rq-opt:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-2px}
@@ -427,15 +434,15 @@ so content aligns with the header/footer text. */
 .rq-label{font-size:14px;line-height:20px;font-weight:500;overflow-wrap:anywhere}
 .rq-badge{background:var(--dsw-alias-state-warn-tertiary);color:var(--dsw-alias-state-warn-primary);border-radius:999px;font-size:11px;line-height:16px;padding:0 7px;flex:none}
 .rq-desc{color:var(--dsw-alias-label-secondary);font-size:13px;line-height:18px;overflow-wrap:anywhere;margin-top:2px}
-.rq-infoBtn{width:20px;height:20px;flex:none;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:999px;place-items:center;padding:0;display:grid;transition:background-color 120ms ease,color 120ms ease}
+.rq-infoBtn{width:20px;height:20px;flex:none;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:999px;place-items:center;padding:0;display:grid;transition:background-color 150ms cubic-bezier(0.2,0.7,0.2,1),color 150ms cubic-bezier(0.2,0.7,0.2,1)}
 .rq-infoBtn:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .rq-infoBtn:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px}
 .rq-infoBtnOn{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-state-business-primary)}
-.rq-expand{display:grid;grid-template-rows:0fr;transition:grid-template-rows 200ms ease}
+.rq-expand{display:grid;grid-template-rows:0fr;transition:grid-template-rows 260ms cubic-bezier(0.2,0.7,0.2,1)}
 .rq-expandOpen{grid-template-rows:1fr}
 .rq-expandInner{overflow:hidden}
-.rq-insight{margin-top:8px;border:1px solid var(--dsw-alias-border-l2-darkmode-thin);background:var(--dsw-alias-markdown-code-block);border-radius:10px;font-size:12px;line-height:18px;max-height:220px;overflow-y:auto;padding:8px 10px;opacity:0;transition:opacity 160ms ease}
-.rq-expandOpen .rq-insight{opacity:1;transition-delay:60ms}
+.rq-insight{margin-top:8px;border:1px solid var(--dsw-alias-border-l2-darkmode-thin);background:var(--dsw-alias-markdown-code-block);border-radius:10px;font-size:12px;line-height:18px;max-height:220px;overflow-y:auto;padding:8px 10px;opacity:0;transition:opacity 200ms cubic-bezier(0.2,0.7,0.2,1)}
+.rq-expandOpen .rq-insight{opacity:1;transition-delay:90ms}
 .rq-insight-md{font-size:12px}
 .rq-sources{margin-top:6px;display:flex;flex-direction:column;gap:2px}
 .rq-sources-title{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:14px;text-transform:uppercase;letter-spacing:.04em}
@@ -454,6 +461,9 @@ a.rq-source:hover{text-decoration:underline}
 .rq-diagram svg{width:100%;height:auto;max-height:224px;display:block}
 .rq-diagramLoading,.rq-diagramError{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px}
 .rq-draftCard{width:100%;max-width:var(--dsh-chat-content-width);border:1px solid var(--dsw-alias-border-l2-darkmode-thin);background:var(--dsw-specific-input-major);border-radius:14px;padding:10px 14px;display:flex;flex-direction:column;gap:7px}
+/* Dock row: the card renders under the conversation input (composer.dock),
+   so it only needs a breath of space from the input card above it. */
+.rq-dockRow{margin-top:8px}
 .rq-draftCard,.rq-draftCard *{box-sizing:border-box}
 .rq-draftHead{display:flex;align-items:center;gap:8px;min-width:0}
 .rq-draftTitle{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:500;color:var(--dsw-alias-label-primary)}
@@ -476,7 +486,7 @@ a.rq-source:hover{text-decoration:underline}
 .rq-pager{flex-shrink:0;align-items:center;gap:8px;display:flex;padding:0 8px 0 16px}
 .rq-progress{color:var(--dsw-alias-label-secondary);white-space:nowrap;font-size:13px;line-height:20px}
 .rq-bar{width:96px;height:3px;background:var(--dsw-alias-border-l2-darkmode-thin);border-radius:999px;overflow:hidden}
-.rq-barFill{height:100%;background:var(--dsw-alias-state-business-primary);border-radius:999px;transition:width 160ms ease}
+.rq-barFill{height:100%;background:var(--dsw-alias-state-business-primary);border-radius:999px;transition:width 200ms cubic-bezier(0.2,0.7,0.2,1)}
 .rq-feedback{flex:1;min-width:0;align-self:center;padding:0 12px;color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:16px;overflow-wrap:anywhere}
 .rq-footerActions{flex-shrink:0;align-items:stretch;display:flex;margin-left:auto}
 .rq-segBtn{background:0 0;border:none;border-left:1px solid var(--dsw-alias-border-l2-darkmode-thin);color:var(--dsw-alias-label-secondary);cursor:pointer;padding:0 14px;min-height:36px;font:inherit;font-size:13px;font-weight:400;line-height:20px;display:inline-flex;align-items:center;transition:background-color 120ms ease,color 120ms ease}
@@ -485,6 +495,7 @@ a.rq-source:hover{text-decoration:underline}
 .rq-segBtn:disabled{opacity:.45;cursor:default}
 .rq-segPrimary{color:var(--dsw-alias-state-business-primary);font-weight:500}
 .rq-segPrimary:hover:not(:disabled){color:var(--dsw-alias-state-business-primary)}
+@media (prefers-reduced-motion: reduce){.rq-expand,.rq-insight,.rq-barFill,.rq-opt,.rq-infoBtn,.rq-segBtn{transition-duration:0ms}}
 @media (width<=720px){.rq-card{border-radius:16px}.rq-header{padding:14px 12px 0 16px}.rq-body{padding:10px 0 2px}.rq-detail{padding:0 12px}.rq-intro{padding:0 12px}.rq-footer{flex-wrap:wrap}.rq-pager{padding:0 8px 0 12px}}`;
 		const tagId = "dsh-rich-questions/survey-wizard.css";
 		if (typeof document !== "undefined" && document.querySelector('style[data-plugin-css="' + tagId + '"]') === null) {
@@ -1304,10 +1315,17 @@ a.rq-source:hover{text-decoration:underline}
 		}
 		/**
 		* Tracker-style builder progress card (operator pattern: the tracking
-		* board / goal UI). Persists until dismissed — and a stale dismissal
-		* never hides active work: any revision or status change re-shows it.
-		* On launch the wizard takes the seat (draft frames stop claiming it),
-		* so the card closes into the wizard by construction.
+		* board / goal UI), rendered as a conversation.composer.dock row — a
+		* list slot beside the input, NOT the composer chain seat. A building
+		* draft is passive progress information: electing it in the chain hid
+		* the real composer (overlay fallback is display:none while an entry is
+		* elected), and a dismissed card rendered null while still elected,
+		* leaving the whole seat empty — the chat appeared to vanish. A dock
+		* row renders (or not) independently; the input is never touched.
+		* Persists until dismissed — and a stale dismissal never hides active
+		* work: any revision or status change re-shows it. On launch the wizard
+		* takes the composer (draft frames stop rendering), so the card closes
+		* into the wizard by construction.
 		*/
 		function DraftCard({ draft, t }) {
 			const [dismissed, setDismissed] = (0, react.useState)(() => loadDraftDismissal(draft.slug));
@@ -1322,7 +1340,7 @@ a.rq-source:hover{text-decoration:underline}
 				saveDraftDismissal(draft.slug, value);
 				setDismissed(value);
 			};
-			return (0, react_jsx_runtime.jsx)("div", { className: "rq-frame", children: (0, react_jsx_runtime.jsxs)("div", { className: "rq-draftCard", children: [
+			return (0, react_jsx_runtime.jsx)("div", { className: "rq-dockRow", children: (0, react_jsx_runtime.jsxs)("div", { className: "rq-draftCard", children: [
 				(0, react_jsx_runtime.jsxs)("div", { className: "rq-draftHead", children: [
 					(0, react_jsx_runtime.jsx)("span", { className: "rq-chip", children: t("draft.eyebrow") }),
 					(0, react_jsx_runtime.jsx)("span", { className: "rq-draftTitle", children: draft.title ?? draft.slug }),
@@ -1344,22 +1362,29 @@ a.rq-source:hover{text-decoration:underline}
 				(0, react_jsx_runtime.jsx)("div", { className: "rq-draftHint", children: t("draft.hint") }),
 			] }) });
 		}
+		/**
+		* Composer-dock row: the conversation's active builder draft as a
+		* tracker card under the input, subscribed to the store so it tracks
+		* draft/updated frames without depending on unrelated re-renders.
+		* Renders null when this session has no active draft — harmless in a
+		* list slot (a chain election would hide the composer fallback).
+		*/
+		function DraftDockRow({ sessionId, t }) {
+			(0, react.useSyncExternalStore)(surveyStore.subscribe, surveyStore.getVersion);
+			const draft = sessionId === undefined ? undefined : surveyStore.draftFor(sessionId);
+			if (draft === undefined) return null;
+			return (0, react_jsx_runtime.jsx)(SurveyBoundary, {
+				t,
+				key: `draft-${String(draft.slug)}`,
+				children: (0, react_jsx_runtime.jsx)(DraftCard, { draft, t }),
+			});
+		}
 		/** Composer occupant: renders the wizard for the selected session's pending survey. */
 		function SurveyComposer(props) {
 			// selectSurvey returns null (not undefined) when the viewed session
 			// has no pending survey — guard BOTH, or the key read crashes and
 			// React unmounts the whole composer seat.
 			if (props.matched == null) return null;
-			// Draft frames (builder card) carry slug; survey entries carry
-			// surveyId. Both render inside the boundary: a card crash must not
-			// kill the composer any more than a wizard crash may.
-			if (props.matched.surveyId === undefined) {
-				return (0, react_jsx_runtime.jsx)(SurveyBoundary, {
-					t: props.t,
-					key: `draft-${String(props.matched.slug)}`,
-					children: (0, react_jsx_runtime.jsx)(DraftCard, { draft: props.matched, t: props.t }),
-				});
-			}
 			// key by surveyId so a follow-up survey in the same session remounts with fresh drafts
 			return (0, react_jsx_runtime.jsx)(SurveyBoundary, {
 				t: props.t,
@@ -1369,18 +1394,25 @@ a.rq-source:hover{text-decoration:underline}
 		}
 		//#endregion
 		//#region lib/index.js
-		/** Chain routing: a pending survey claims the composer seat (the wizard); otherwise the conversation's active draft shows its tracker-style progress card. */
+		/**
+		* Chain routing: only a pending SURVEY claims the composer seat (the
+		* wizard). Builder drafts render as a conversation.composer.dock row
+		* instead (DraftDockRow) — a building draft must never hide the chat
+		* composer, and a dismissed card must never leave the seat empty.
+		*/
 		function selectSurvey({ session }) {
 			const sessionId = session?.sessionId;
 			if (sessionId === void 0) return null;
-			return surveyStore.get(sessionId) ?? surveyStore.draftFor(sessionId) ?? null;
+			return surveyStore.get(sessionId) ?? null;
 		}
 		const inject = ["slots", "locale"];
 		/**
 		* Client plugin body: locale dictionaries + the survey wizard into the
 		* conversation composer chain (the same seat the built-in question
 		* composer occupies; the two never claim one request — this one only
-		* claims its own pending surveys).
+		* claims its own pending surveys) + the builder draft card into the
+		* composer dock (list slot: rows render beside the input, never over
+		* it).
 		*/
 		function apply(ctx) {
 			// Hydrate at activation: SSE + reconciliation poll against the
@@ -1393,6 +1425,12 @@ a.rq-source:hover{text-decoration:underline}
 				select: selectSurvey,
 				locale: NS
 			}, SurveyComposer));
+			ctx.slots.inject("conversation.composer.dock", () => ctx.slots.register({
+				name: "conversation.composer.dock",
+				id: "rich-questions-draft",
+				order: 20,
+				locale: NS
+			}, DraftDockRow));
 		}
 		exports.apply = apply;
 		exports.inject = inject;

@@ -90,6 +90,38 @@ test('patch completes content, refuses >3 questions, unknown ids, and reports ig
   assert.equal(structural.draft.revision, 0, 'content patches never bump the structure revision')
 })
 
+test('option patches merge per-field: a sources-only patch keeps the prose', async () => {
+  const { store } = await freshStore()
+  const { draft } = await store.begin({ conversationId: 'conv-1', title: 'T', survey: skeleton() })
+  const fleshed = await store.patch({ slug: draft.slug, questions: { q1: { prompt: 'Pick?', options: fiveKeys.map((key) => ({ key, label: `L${key}`, description: `why ${key}`, insight: '**Promise** p. **Price** c. **Present** t.', sources: ['old/ref'] })) } } })
+  assert.equal(fleshed.ok, true)
+
+  const merged = await store.patch({ slug: draft.slug, questions: { q1: { options: fiveKeys.map((key) => ({ key, sources: ['new/ref'] })) } } })
+  assert.equal(merged.ok, true)
+  for (const [index, option] of merged.draft.survey.questions.q1.options.entries()) {
+    assert.equal(option.description, `why ${option.key}`, `description was wiped by the sources-only patch at index ${index}`)
+    assert.match(option.insight, /Promise/)
+    assert.deepEqual(option.sources, ['new/ref'], 'the new sources must land')
+    assert.equal(option.label, `L${option.key}`, 'labels survive untouched')
+  }
+
+  // A longer patch list grows the array; new entries start from their own content.
+  const grown = await store.patch({ slug: draft.slug, questions: { q1: { options: [...fiveKeys.map((key) => ({ key })), { key: 'f', label: 'New option', description: 'fresh' }] } } })
+  assert.equal(grown.ok, true)
+  assert.equal(grown.draft.survey.questions.q1.options.length, 6)
+  assert.equal(grown.draft.survey.questions.q1.options[5].description, 'fresh')
+  assert.equal(grown.draft.survey.questions.q1.options[0].description, 'why a', 'existing entries keep their prose when the patch list grows')
+
+  // A SHORTER patch list keeps the untouched tail — no silent truncation.
+  const tailKept = await store.patch({ slug: draft.slug, questions: { q1: { options: [{ key: 'a', sources: ['final/ref'] }] } } })
+  assert.equal(tailKept.ok, true)
+  const after = tailKept.draft.survey.questions.q1.options
+  assert.equal(after.length, 6, 'a one-option patch must not truncate the option list')
+  assert.deepEqual(after[0].sources, ['final/ref'])
+  assert.equal(after[0].description, 'why a')
+  assert.equal(after[5].description, 'fresh', 'the untouched tail survives intact')
+})
+
 test('structure replaces the graph and bumps the revision; the cap freezes it', async () => {
   const { store } = await freshStore({ structureQuestionCap: 3 })
   const { draft } = await store.begin({ conversationId: 'conv-1', title: 'T', survey: skeleton() })

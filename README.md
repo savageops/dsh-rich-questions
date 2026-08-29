@@ -35,12 +35,12 @@ Restart the `dsh web` process, refresh the tab — done. The `ask_survey` tool i
 | | |
 |---|---|
 | **Branching paths** | Every option declares what follows it (`next`). Choose *C*, get a different range of questions than *A*. Multi-select fans out depth-first; skipped/free-text fall through cleanly; the host re-derives the path independently so claimed paths are always verifiable. |
-| **Per-option intelligence** | Insights (~6 lines: what great looks like / the tradeoff / "(today)"), sources and citations, and compact **Mermaid diagrams** — all behind one click-to-expand disclosure (`?` for text, the branch icon for the diagram); no hover ambushes, ever. |
+| **Per-option intelligence** | Insights (~6 lines as a triple: **Promise** — what choosing this sets up / **Price** — what it costs or risks / **Present** — where things stand today, with a concrete handle), sources and citations, and compact **Mermaid diagrams** — all behind one click-to-expand disclosure (`?` for text, the branch icon for the diagram); no hover ambushes, ever. |
 | **Justify** | Selected options gain a pencil affordance: state *why* you chose this option in one line (inline input, checkmark or Enter submits, re-editable any time before submit). The why rides the answer as `justifications` — the agent reads your stated intent when deriving follow-ups. |
 | **Quick mode** | Up to six whole-survey decision templates (`a`–`f`) next to Start — "Ship like Vercel/Railway: polish + DX first" vs "Lean internal tool: ship fast". One click applies a complete, coherent answer map and submits. A 20-question alignment exercise becomes a single decision. |
 | **Bank & continue** | Per-step commit for long surveys: answers-so-far go to the host *in the background* while you advance immediately. Banked answers **lock** (view-only forever after), survive reloads, and follow you to any browser. A `{n} banked` chip tracks them. |
 | **Durable progress** | Drafts autosave per survey — reload, switch tabs, come back tomorrow: same question, same answers, same position. Nothing to press. |
-| **Pre-flight steering** | **Reroll** (rewrite it cleaner), **Push** (deep research: 12+ competitors, GitHub open-source repos, `.refs/` curated references — options grounded in specific evidence, not guessing), **Discuss** (drop the form, talk it through) — one click each, before the first question. |
+| **Pre-flight steering** | **Reroll** (rewrite cleaner **and escalate**: every quality-bar gap fixed, depth never shrinks), **Push** (research lands as reusable artifacts: digest → `.docs/digest/`, findings → `.docs/research/`, competitor UI/API rips → `.docs/research/rips/`, competitor source → `.refs/`; 12+ systems studied, then re-authored at **2× depth**, evidence-cited), **Discuss** (drop the form, talk it through) — one click each, before the first question. |
 | **Language follows you** | English chat → English survey. 中文 → 中文. Any language → that language, consistently. |
 | **Host-authoritative** | The pending survey lives on the host — close the browser, kill the tab, the tool keeps waiting and the wizard rehydrates on reconnect. |
 
@@ -97,7 +97,7 @@ One spec, every capability:
             "key": "a",
             "label": "Ship the public surface",
             "description": "One-line tradeoff, always visible.",
-            "insight": "**What great looks like** — …\n**Tradeoff** — …\n**(today)** — …",
+            "insight": "**Promise** — …\n**Price** — …\n**Present** — …",
             "diagram": "flowchart TD; ship-->polish; polish-->latency; latency-->done",
             "sources": ["https://example.com/rfc-1"],
             "recommended": true,
@@ -114,7 +114,7 @@ One spec, every capability:
     },
     "quick": [
       { "key": "a", "label": "Highest standard: Vercel/Railway grade", "recommended": true,
-        "insight": "Who this is for, what it optimizes, the tradeoff.",
+        "insight": "Promise: what this template sets up. Price: its tradeoff. Present: who it is for today.",
         "answers": { "q1": { "selected": ["a"] }, "q2a": { "selected": ["b"] }, "q3": { "selected": ["a", "c"] } } },
       { "key": "b", "label": "Lean internal tool", "answers": { "q1": { "selected": ["b"] } } }
     ]
@@ -148,22 +148,27 @@ Quick-template reachability errors now also list the path the template's selecti
 
 ## Question builder
 
-For big, research-grounded surveys, one giant `ask_survey` payload is the wrong shape: slow to generate, truncation-prone on small local models, and it forces all research to finish before a word is written. The builder splits that into a lifecycle the model drives while researching:
+For big, research-grounded surveys, one giant `ask_survey` payload is the wrong shape: slow to generate, truncation-prone on small local models, and it forces all research to finish before a word is written. The builder runs a **research-first loop** — study 9–12 comparable systems *before* locking structure, then keep researching while the draft grows:
 
 ```
+research first                 study 9–12 comparable systems; findings → .docs/research/,
+                               digests → .docs/digest/, competitor UI/API rips → .docs/research/rips/,
+                               competitor source → .refs/ — research that is not written down did not happen
 survey_draft_set op=begin      lock a full-frame skeleton (ids, ≥5 option keys, branch wiring; prompts/labels may be "TODO:" stubs)
-  ↕  research (codebase / web / 9–12 competitors / docs) with your own tools
+  ↕  keep researching with your own tools
 survey_draft_set op=patch      flesh out ≤3 questions per call — prose only; the same op sets draft-level intro and quick (templates authored LAST, over finished questions, coverage-checked immediately)
-survey_draft_get               the required-field checklist (per option: label, description, insight, ≥1 source)
+survey_draft_get               the required-field checklist (per option: label, description, insight, ≥1 source) — the launch gate
 survey_draft_launch            refuses any TODO:, then starts the wizard; reroll/push/discuss REOPEN the draft
 ```
+
+The loop is commanded, not suggested: research → patch → get until the gate is clean, then launch. Results carry a `handling` contract — mirror the user's stance back in one line, trace decisions to answers, never re-ask what a survey already answered.
 
 Rules worth knowing:
 
 - **Drafts are files.** `.dsh/survey-drafts/<slug>.json` in the session workspace (git-diffable; old drafts remain as reference) with a machine-local manifest under `~/.dsh/rich-questions/drafts/index.json` (statuses, one active draft per conversation). No workspace? Drafts fall back machine-local.
 - **Soft structure lock.** `op=structure` (whole-graph replace) is allowed while the draft is under `structureQuestionCap` (cordis config, default 40); each use bumps a revision counter. Content patches always work, even under the freeze.
 - **Required, not blocked.** Every option's label/description/insight/sources and every prompt are required fields — `get` lists every gap continuously; launch is the only enforcement point.
-- **The draft card.** A tracker-style progress card occupies the composer seat while building (progress bar, counts, revision; persists until dismissed — and a stale dismissal never hides a revision or status change). On launch the wizard takes the seat; the card closes into it.
+- **The draft card never blocks the composer.** A tracker-style progress card renders as a `conversation.composer.dock` row beside the input while building (progress bar, counts, revision; persists until dismissed — and a stale dismissal never hides a revision or status change). Only a pending *survey* claims the composer chain seat; a building draft must never hide the chat input, and a dismissed card must never leave the seat empty. On launch the wizard takes the seat; the card closes into it.
 - **No expiration.** Pending surveys wait indefinitely — the TTL sweeper is gone. The only settle paths are the user's own actions (answer / cancel / preflight) or a turn abort.
 - **Nothing ends silently.** Every settle persists a full record — spec, banked answers, outcome — to `~/.dsh/rich-questions/surveys/<surveyId>.json`, tracker-style.
 
@@ -179,7 +184,8 @@ Completed (manual walk, quick template, or a mix — indistinguishable):
     { "id": "q1", "selected": [{ "key": "a", "label": "Ship the public surface" }] },
     { "id": "q3", "selected": [{ "key": "a", "label": "…" }, { "key": "c", "label": "…" }] }
   ],
-  "skipped": []
+  "skipped": [],
+  "handling": "Open your next turn by mirroring the user’s stance in one line before acting on these answers (…). Trace each landed decision back to its answer … Never re-ask what this survey already answered …"
 }
 ```
 
@@ -188,7 +194,7 @@ Pre-flight redirect:
 ```json
 {
   "outcome": "push",
-  "instruction": "The user hit \"Push\" before starting: … run aggressive web research … Call ask_survey again with the expanded, better-informed spec; do not ask the user anything first."
+  "instruction": "The user hit \"Push\" before starting: … study a MINIMUM of 12 competitors … write the digest to .docs/digest/<topic>.md … re-author at GUARANTEED DOUBLE DEPTH … re-enter the builder loop …"
 }
 ```
 
@@ -204,8 +210,13 @@ src/survey-engine.js   Pure engine — branch-path computation + self-repairing
                        spec/answer validation. Imported by the host AND inlined
                        verbatim into the client bundle (keep the two in sync).
 src/client.bundle.js   Browser half — the composer-seat wizard (draft autosave,
-                       banking, quick mode, diagrams, tooltips). React + client
-                       primitives only.
+                       banking, quick mode, diagrams, tooltips) plus the
+                       builder draft card as a composer.dock row. React +
+                       client primitives only.
+skills/                The authoring doctrine as a loadable skill (loop, bar
+                       with a worked example, feel, escalation guarantees) —
+                       copy to the workspace `.agents/skills/` for the
+                       catalog to pick up.
 cordis.patch.yml       Bundle patch inserting the plugin row.
 ```
 
