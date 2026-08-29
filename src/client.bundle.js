@@ -145,9 +145,15 @@ window.__ModuleLoader__.load({
 					if (entry === null || typeof entry !== "object" || entry.status === "discarded") continue;
 					next.set(slug, { slug, conversationId: entry.conversationId, title: entry.title, status: entry.status, updatedAt: entry.updatedAt, revision: entry.revision, ready: entry.ready, progress: entry.progress });
 				}
-				// Live frames may be fresher than the manifest (routes write the
-				// manifest after the SSE push): keep any live-only slug.
-				for (const [slug, frame] of draftsBySlug) if (frame.__live === true && !next.has(slug)) next.set(slug, frame);
+				// A live frame (draft/updated) beats a manifest projection of the
+				// same slug whenever it is at least as fresh: a poll fetched
+				// before a patch can resolve after that patch's SSE frame, and
+				// replaying the older snapshot would visibly roll progress back.
+				for (const [slug, frame] of draftsBySlug) {
+					if (frame.__live !== true) continue;
+					const projected = next.get(slug);
+					if (projected === undefined || (frame.updatedAt ?? 0) >= (projected.updatedAt ?? 0)) next.set(slug, frame);
+				}
 				const signature = JSON.stringify([...next.entries()]);
 				const previous = JSON.stringify([...draftsBySlug.entries()].map(([slug, frame]) => [slug, { slug, conversationId: frame.conversationId, title: frame.title, status: frame.status, updatedAt: frame.updatedAt, revision: frame.revision, ready: frame.ready, progress: frame.progress }]));
 				if (signature === previous) return;
@@ -1313,6 +1319,9 @@ a.rq-source:hover{text-decoration:underline}
 		function saveDraftDismissal(slug, value) {
 			try { window.localStorage.setItem(DRAFT_DISMISS_PREFIX + slug, JSON.stringify(value)) } catch { /* best-effort */ }
 		}
+		function clearDraftDismissal(slug) {
+			try { window.localStorage.removeItem(DRAFT_DISMISS_PREFIX + slug) } catch { /* best-effort */ }
+		}
 		/**
 		* Tracker-style builder progress card (operator pattern: the tracking
 		* board / goal UI), occupying the composer seat while a draft builds —
@@ -1336,7 +1345,7 @@ a.rq-source:hover{text-decoration:underline}
 					(0, react_jsx_runtime.jsx)("span", { className: "rq-chip", children: t("draft.eyebrow") }),
 					(0, react_jsx_runtime.jsx)("span", { className: "rq-draftTitle", children: draft.title ?? draft.slug }),
 					(0, react_jsx_runtime.jsxs)("span", { className: "rq-draftCounts", children: [`${String(done)}/${String(total)} `, t("draft.complete")] }),
-					(0, react_jsx_runtime.jsx)("button", { type: "button", className: "rq-crashRetry", onClick: () => setDismissed(null), children: t("draft.show") }),
+					(0, react_jsx_runtime.jsx)("button", { type: "button", className: "rq-crashRetry", onClick: () => { clearDraftDismissal(draft.slug); setDismissed(null); }, children: t("draft.show") }),
 				] }) });
 			}
 			const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
@@ -1375,8 +1384,15 @@ a.rq-source:hover{text-decoration:underline}
 			(0, react.useSyncExternalStore)(surveyStore.subscribe, surveyStore.getVersion);
 			let matched = props.matched;
 			if (matched != null && matched.surveyId === undefined) {
-				const fresh = surveyStore.draftFor(matched.conversationId);
-				if (fresh !== undefined) matched = fresh;
+				// A launched survey outranks the card: draft/updated(launched) and
+				// survey/requested arrive back-to-back, and the stale building
+				// card must not hold the seat while the wizard is answerable.
+				const pending = surveyStore.get(matched.conversationId);
+				if (pending !== undefined) matched = pending;
+				else {
+					const fresh = surveyStore.draftFor(matched.conversationId);
+					matched = fresh !== undefined ? fresh : null;
+				}
 			}
 			// selectSurvey returns null (not undefined) when the viewed session
 			// has nothing to claim — guard BOTH, or the key read crashes and

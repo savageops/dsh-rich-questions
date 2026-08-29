@@ -8,7 +8,7 @@
 
 - `matched=null` — `selectSurvey` returns `null` (not `undefined`) when the viewed session has no pending survey; the composer must render nothing and survive.
 - a poison spec (`questions: {q1: null}`) — the `SurveyBoundary` error boundary must catch the render crash, show the visible error card, and keep the composer mounted through a Retry click.
-- the builder draft card — a `conversation.composer.dock` row, NOT a chain claimant: a building draft must not elect the composer chain (electing it hides the composer fallback; a dismissed card that rendered null while elected left the whole seat empty — the "chat disappears" bug). The dock row renders the tracker card (title, status chip, `4/12` progress counts), dismissal hides only the row, and a revision bump re-shows it through the store subscription (no manual re-render).
+- the builder draft card — claims the composer seat (the operator's in-space rule): renders the tracker card (title, status chip, `4/12` progress counts), dismissal collapses it to a one-line strip with a Show button, and a revision bump re-expands it through the store subscription.
 
 Exit code 0 only when every step passes and zero runtime errors were collected.
 

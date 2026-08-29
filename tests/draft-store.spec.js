@@ -70,6 +70,32 @@ test('begin slug collisions get numeric suffixes and old drafts remain', async (
   assert.equal(old.ok, true)
 })
 
+test('begin adopts a fresh slug when the manifest lost a draft file (no clobber)', async () => {
+  const { store, profileRoot } = await freshStore()
+  await store.begin({ conversationId: 'conv-1', title: 'Same Topic', survey: skeleton() })
+  // Manifest loss (corrupt/home switch): the file remains, the manifest forgets.
+  const { rm } = await import('node:fs/promises')
+  await rm(join(profileRoot, 'rich-questions', 'drafts', 'index.json'), { force: true })
+  const second = await store.begin({ conversationId: 'conv-2', title: 'Same Topic', survey: skeleton() })
+  assert.equal(second.draft.slug, 'same-topic-2', 'an existing draft file must never be clobbered by a fresh manifest')
+  const first = await store.get({ slug: 'same-topic' })
+  assert.equal(first.ok, true, 'the original draft file must survive')
+})
+
+test('ops on a missing draft file fail with a draft-facing error, not ENOENT', async () => {
+  const { store } = await freshStore()
+  const launched = await store.markLaunched('missing-slug')
+  assert.equal(launched.ok, false)
+  assert.match(launched.error, /could not be read/)
+  const discarded = await store.discard('missing-slug')
+  assert.equal(discarded.ok, false)
+  assert.match(discarded.error, /could not be read/)
+  const patched = await store.patch({ slug: 'missing-slug', questions: { q1: { prompt: 'x' } } })
+  assert.match(patched.error, /could not be read/)
+  const structured = await store.structure({ slug: 'missing-slug', survey: skeleton() })
+  assert.match(structured.error, /could not be read/)
+})
+
 test('patch completes content, refuses >3 questions, unknown ids, and reports ignored next fields', async () => {
   const { store } = await freshStore()
   const { draft } = await store.begin({ conversationId: 'conv-1', title: 'T', survey: skeleton() })
@@ -151,7 +177,7 @@ test('structure replaces the graph and bumps the revision; the cap freezes it', 
     },
   })
   assert.equal(frozen.ok, false)
-  assert.match(frozen.error, /locked at 3 questions/)
+  assert.match(frozen.error, /the cap is 3/)
   const stillPatched = await store.patch({ slug: draft.slug, questions: { q1: fleshed() } })
   assert.equal(stillPatched.ok, true, 'content patches continue under the freeze')
 })

@@ -181,7 +181,7 @@ class SurveyHostService {
     if (signal?.aborted === true) return Promise.reject(new SurveyError('ask_survey was aborted before the user answered', 'SURVEY_ABORTED'))
     return new Promise((resolve, reject) => {
       const surveyId = randomUUID()
-      const entry = { surveyId, sessionId, spec, createdAt: Date.now(), resolve, reject, onAbort: undefined, banked: new Map() }
+      const entry = { surveyId, sessionId, spec, createdAt: Date.now(), resolve, reject, onAbort: undefined, signal, banked: new Map() }
       if (signal !== undefined) {
         entry.onAbort = () => this.settle(surveyId, { outcome: 'cancelled' })
         signal.addEventListener('abort', entry.onAbort, { once: true })
@@ -641,6 +641,8 @@ function draftToolDefinitions(ctx, service, structureQuestionCap) {
         draft: { type: 'string' },
         draftReopened: { type: 'boolean' },
         completeness: { type: 'object' },
+        grounding: { type: 'object' },
+        ignored: { type: 'array', items: { type: 'string' } },
       },
     },
     render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
@@ -674,7 +676,7 @@ function draftToolDefinitions(ctx, service, structureQuestionCap) {
   })
   const setTool = {
     name: 'survey_draft_set',
-    description: 'Builder write, and the RESEARCH-FIRST LOOP in tool form: study 9-12 comparable systems BEFORE locking structure (findings to .docs/research/, condensed digests to .docs/digest/, captured competitor UI/API traces to .docs/research/rips/, downloaded competitor source to .refs/ — research that is not written down did not happen). op=begin: lock the skeleton {title, survey:{entry, questions}} — ids, >=5 option keys per option-bearing question (labels/prompts may be TODO stubs), branch wiring validated on the spot; the draft title defaults the survey title. op=patch: flesh out at most 3 questions per call — question fields and option fields MERGE per-field (send only what changes; safe to add sources to already-written options), prose only (prompt/header/detail/multiSelect/allowCustom/skippable/options label+description+insight+sources — option next fields are structural and ignored), plus draft-level intro and quick (authored LAST over finished questions; validated immediately incl. the two-way coverage rule). op=structure: replace the whole graph while under the question cap; bumps revision — use it when research reshapes the skeleton or options must be reordered/removed. op=discard: retire the active draft. Loop [research → patch] until survey_draft_get reports zero gaps, then launch. One active draft per conversation; drafts persist as workspace files; old drafts remain.',
+    description: 'Builder write, and the RESEARCH-FIRST LOOP in tool form: study 9-12 comparable systems BEFORE locking structure (findings to .docs/research/, condensed digests to .docs/digest/, captured competitor UI/API traces to .docs/research/rips/, downloaded competitor source to .refs/ — research that is not written down did not happen). op=begin: lock the skeleton {title, survey:{entry, questions}} — ids, >=5 option keys per option-bearing question (labels/prompts may be TODO stubs), branch wiring validated on the spot; the draft title defaults the survey title. op=patch: flesh out at most 3 questions per call — question fields and option fields MERGE per-field (send only what changes; per-option `sources` is the one exception and replaces the entire source list of that option), prose only (prompt/header/detail/multiSelect/allowCustom/skippable/options label+description+insight+sources — option next fields are structural and ignored), plus draft-level intro and quick (authored LAST over finished questions; validated immediately incl. the two-way coverage rule). op=structure: replace the whole graph while under the question cap; bumps revision — use it when research reshapes the skeleton or options must be reordered/removed. op=discard: retire the active draft. Loop [research → patch] until survey_draft_get reports zero gaps, then launch. One active draft per conversation; drafts persist as workspace files; old drafts remain.',
     parameters: {
       type: 'object',
       required: ['op'],

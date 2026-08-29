@@ -168,7 +168,7 @@ Rules worth knowing:
 - **Drafts are files.** `.dsh/survey-drafts/<slug>.json` in the session workspace (git-diffable; old drafts remain as reference) with a machine-local manifest under `~/.dsh/rich-questions/drafts/index.json` (statuses, one active draft per conversation). No workspace? Drafts fall back machine-local.
 - **Soft structure lock.** `op=structure` (whole-graph replace) is allowed while the draft is under `structureQuestionCap` (cordis config, default 40); each use bumps a revision counter. Content patches always work, even under the freeze.
 - **Required, not blocked.** Every option's label/description/insight/sources and every prompt are required fields — `get` lists every gap continuously; launch is the only enforcement point.
-- **The draft card never blocks the composer.** A tracker-style progress card renders as a `conversation.composer.dock` row beside the input while building (progress bar, counts, revision; persists until dismissed — and a stale dismissal never hides a revision or status change). Only a pending *survey* claims the composer chain seat; a building draft must never hide the chat input, and a dismissed card must never leave the seat empty. On launch the wizard takes the seat; the card closes into it.
+- **The draft card owns the input's space.** A tracker-style progress card claims the composer seat while building — the same in-space contract the launched wizard has (progress bar, counts, revision). Dismissal collapses it to a one-line strip in the seat (never an empty seat, never a dock row under the input), and a stale dismissal — any revision or status change — re-expands the full card. On launch the wizard takes the seat; the card closes into it.
 - **No expiration.** Pending surveys wait indefinitely — the TTL sweeper is gone. The only settle paths are the user's own actions (answer / cancel / preflight) or a turn abort.
 - **Nothing ends silently.** Every settle persists a full record — spec, banked answers, outcome — to `~/.dsh/rich-questions/surveys/<surveyId>.json`, tracker-style.
 
@@ -211,8 +211,8 @@ src/survey-engine.js   Pure engine — branch-path computation + self-repairing
                        verbatim into the client bundle (keep the two in sync).
 src/client.bundle.js   Browser half — the composer-seat wizard (draft autosave,
                        banking, quick mode, diagrams, tooltips) plus the
-                       builder draft card as a composer.dock row. React +
-                       client primitives only.
+                       in-seat builder draft card and its error boundary.
+                       React + client primitives only.
 skills/                The authoring doctrine as a loadable skill (loop, bar
                        with a worked example, feel, escalation guarantees) —
                        copy to the workspace `.agents/skills/` for the
