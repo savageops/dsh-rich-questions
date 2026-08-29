@@ -66,6 +66,22 @@ window.__ModuleLoader__.load({
 		//#endregion
 		//#region lib/transport.js
 		const API = "/api/rich-questions";
+		/** Minimize persistence, keyed by surveyId: survives reloads and tab
+		 * switches like every other piece of wizard state. Cleared when the
+		 * survey settles (answered / cancelled / superseded) so a fresh ask
+		 * always starts expanded. */
+		const MINIMIZED_PREFIX = "dsh-rich-questions/minimized/";
+		function isSurveyMinimized(surveyId) {
+			if (typeof surveyId !== "string") return false;
+			try { return window.localStorage.getItem(MINIMIZED_PREFIX + surveyId) === "1" } catch { return false }
+		}
+		function setSurveyMinimized(surveyId, value) {
+			if (typeof surveyId !== "string") return;
+			try {
+				if (value === true) window.localStorage.setItem(MINIMIZED_PREFIX + surveyId, "1");
+				else window.localStorage.removeItem(MINIMIZED_PREFIX + surveyId);
+			} catch { /* best-effort */ }
+		}
 		/**
 		* Module-level survey store: sessionId -> { surveyId, spec, createdAt }.
 		* Hydrated by the plugin SSE stream (hello + requested/resolved frames)
@@ -76,12 +92,13 @@ window.__ModuleLoader__.load({
 		function createSurveyStore() {
 			const bySession = new Map();
 			const draftsBySlug = new Map();
-			// Seat-level minimize: a minimized pending survey RELEASES the
-			// composer seat (select declines, the fallback input returns with
-			// its state intact) and survives wizard unmounts — the reopener
-			// button is the only surface while it holds.
-			const minimizedBySession = new Set();
 			const listeners = new Set();
+			// Minimize toggles need a second audience: the apply closure, which
+			// bumps the locale revision so slot outlets re-run chain election
+			// (releasing or re-claiming the composer seat). Store listeners
+			// alone only re-render ALREADY-MOUNTED components — election runs
+			// above them.
+			const minimizeListeners = new Set();
 			let started = false;
 			// Monotonic tick for useSyncExternalStore subscribers: a stable
 			// primitive snapshot that changes exactly when notify() fires.
@@ -90,12 +107,17 @@ window.__ModuleLoader__.load({
 				version += 1;
 				for (const listener of [...listeners]) listener();
 			}
+			/** Notify mounted subscribers AND the election-refresh hook. */
+			function bump() {
+				notify();
+				for (const listener of [...minimizeListeners]) listener();
+			}
 			function applyState(surveys) {
 				let changed = false;
 				const live = new Map(surveys.map((survey) => [survey.sessionId, survey]));
-				for (const [sessionId] of [...bySession]) if (!live.has(sessionId)) {
+				for (const [sessionId, current] of [...bySession]) if (!live.has(sessionId)) {
 					bySession.delete(sessionId);
-					minimizedBySession.delete(sessionId);
+					if (typeof current?.surveyId === "string") setSurveyMinimized(current.surveyId, false);
 					changed = true;
 				}
 				for (const survey of surveys) {
@@ -105,16 +127,19 @@ window.__ModuleLoader__.load({
 						changed = true;
 					}
 				}
-				if (changed) notify();
+				// A pending-table change must re-run composer election: store
+				// notifications only re-render already-mounted components, and
+				// election runs above them (a quiet session would hang the seat).
+				if (changed) bump();
 			}
 			function applyFrame(frame) {
 				if (frame.type === "survey/requested") {
 					if (bySession.get(frame.sessionId)?.surveyId !== frame.surveyId) {
 						bySession.set(frame.sessionId, { surveyId: frame.surveyId, sessionId: frame.sessionId, spec: frame.spec, createdAt: frame.createdAt ?? Date.now() });
-						// A NEW survey always claims fresh — a stale minimize
-						// flag from the previous one must not shadow it.
-						minimizedBySession.delete(frame.sessionId);
-						notify();
+						// Election refresh: a fresh pending survey must claim the
+						// composer even when no transcript event re-renders the root
+						// (e.g. the issuing tool run aborts without logging).
+						bump();
 					}
 				} else if (frame.type === "survey/banked") {
 					// Another tab banked answers: merge into the stored survey so
@@ -129,17 +154,21 @@ window.__ModuleLoader__.load({
 				} else if (frame.type === "survey/resolved") {
 					if (bySession.get(frame.sessionId)?.surveyId === frame.surveyId) {
 						bySession.delete(frame.sessionId);
-						minimizedBySession.delete(frame.sessionId);
-						notify();
+						setSurveyMinimized(frame.surveyId, false);
+						// Election refresh: the claim must release promptly (the
+						// quiet-session hang — nothing else re-runs election).
+						bump();
 					}
 				} else if (frame.type === "draft/updated") {
-					// Live builder frame (every set op / launch / reopen). Discard
-					// clears the card; anything else upserts, merged over the
-					// hydrated frame so partial frames keep earlier fields.
+					// Live builder frame (every set op / launch / reopen / discard).
+					// Discard clears the card; anything else upserts, merged over
+					// the hydrated frame so partial frames keep earlier fields.
 					if (typeof frame.slug !== "string") return;
 					if (frame.status === "discarded") draftsBySlug.delete(frame.slug);
 					else draftsBySlug.set(frame.slug, { ...(draftsBySlug.get(frame.slug) ?? {}), ...frame, __live: true });
-					notify();
+					// Election refresh: launch skips the card in draftFor and
+					// discard removes it — both must re-run the seat claim.
+					bump();
 				} else if (frame.type === "hello") {
 					applyState(frame.surveys ?? []);
 					applyDrafts(frame.drafts);
@@ -219,24 +248,13 @@ window.__ModuleLoader__.load({
 				 */
 				start,
 				/** Forget locally after a successful action (the resolved frame confirms). */
-				forget(sessionId) {
-					minimizedBySession.delete(sessionId);
-					if (bySession.delete(sessionId)) notify();
-				},
-				/** Seat-level minimize state for one conversation. */
-				isMinimized(sessionId) { return minimizedBySession.has(sessionId); },
-				/**
-				 * Minimize releases the composer seat; expand re-claims it.
-				 * The notify re-renders every store subscriber — the wizard
-				 * unmounts on the next chain election, the reopener button
-				 * mounts from the composer dock.
-				 */
-				setMinimized(sessionId, value) {
-					const next = value === true;
-					if (minimizedBySession.has(sessionId) === next) return;
-					if (next) minimizedBySession.add(sessionId);
-					else minimizedBySession.delete(sessionId);
-					notify();
+				forget(sessionId) { if (bySession.delete(sessionId)) notify(); },
+				/** Minimize toggle: notify mounted subscribers AND the election-refresh hook. */
+				bump,
+				/** Apply-side subscription: minimize toggles bump the locale revision so slot outlets re-run chain election. */
+				onMinimizeChange(listener) {
+					minimizeListeners.add(listener);
+					return () => minimizeListeners.delete(listener);
 				},
 				subscribe(listener) {
 					start();
@@ -314,9 +332,9 @@ window.__ModuleLoader__.load({
 			"error.unanswered": "请先选择一个选项或填写答案。",
 			"nav.prev": "上一题",
 			"nav.cancel": "放弃问卷",
-			"nav.minimize": "收起问卷（回到对话输入）",
-			"nav.reopen": "展开进行中的问卷",
-			"nav.maximize": "展开问卷卡片"
+			"nav.minimize": "收起问卷",
+			"nav.minimize.hint": "把问卷收起——聊天输入恢复原状；点输入区右上方的圆形按钮随时重新打开。",
+			"fab.open": "打开进行中的问卷"
 		};
 		const en = {
 			"title.default": "Survey",
@@ -371,9 +389,9 @@ window.__ModuleLoader__.load({
 			"error.unanswered": "Please select an option or type an answer first.",
 			"nav.prev": "Previous question",
 			"nav.cancel": "Dismiss the survey",
-			"nav.minimize": "Minimize the survey (back to chat input)",
-			"nav.reopen": "Reopen the survey in progress",
-			"nav.maximize": "Expand the survey card"
+			"nav.minimize": "Minimize survey",
+			"nav.minimize.hint": "Put the survey away — the chat input returns; reopen it from the round button above the composer.",
+			"fab.open": "Reopen the survey in progress"
 		};
 		//#endregion
 		//#region lib/draft-store.js
@@ -432,15 +450,23 @@ window.__ModuleLoader__.load({
 		//#endregion
 		//#region lib/styles.css
 		const css = `.rq-frame{padding:6px calc(var(--dsh-composer-side-clearance) + 16px) 10px;justify-content:center;display:flex}
+/* The claim column: a pending survey replaces the INPUT CARD only — the
+   ambient dock (todo pill / tracking board / goal bar) re-renders above it
+   with the composer stack's own 6px rhythm, so the composer zone keeps its
+   shape instead of collapsing into one orphan container. */
+.rq-claim{flex-direction:column;gap:6px;padding:6px 0 10px;display:flex}
+/* The reopen FAB: one round floating affordance while a survey is minimized.
+   Zero-height first row of the input dock; the button floats at the right
+   edge in the back-to-bottom lane (58px = 16px lane + 34px control + 8px
+   gap), attach-circle grammar (filled round, no border). */
+.rq-fabWrap{position:relative;height:0;flex:none}
+.rq-fab{position:absolute;right:0;bottom:calc(100% + 58px);width:34px;height:34px;border:none;border-radius:999px;background:var(--dsw-specific-selector);color:var(--dsw-alias-label-primary);display:grid;place-items:center;cursor:pointer;box-shadow:var(--dsw-shadow-lv2);z-index:8}
+.rq-fab:hover{background:var(--dsw-alias-interactive-bg-hover-solid)}
+.rq-fab:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px}
 .rq-card{width:100%;max-width:var(--dsh-chat-content-width);border:1px solid var(--dsw-alias-border-l2-darkmode-thin);background:var(--dsw-specific-input-major);max-height:min(60vh,520px);box-shadow:var(--dsw-shadow-lv2);color:var(--dsw-alias-label-primary);--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2);--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2);border-radius:20px;flex-direction:column;padding:0;display:flex;overflow:hidden}
 .rq-card,.rq-card *{box-sizing:border-box}
 .rq-card,.rq-body,.rq-insight,.rq-source-list{scrollbar-width:none}
 .rq-card::-webkit-scrollbar,.rq-body::-webkit-scrollbar,.rq-insight::-webkit-scrollbar,.rq-source-list::-webkit-scrollbar{display:none;width:0;height:0}
-.rq-cardMinimized{max-height:none}
-.rq-reopener{position:fixed;right:20px;bottom:132px;z-index:60;width:40px;height:40px;border-radius:999px;display:grid;place-items:center;cursor:pointer;border:1px solid var(--dsw-alias-border-l2-darkmode-thin);background:var(--dsw-specific-input-major);color:var(--dsw-alias-state-business-primary);box-shadow:var(--dsw-shadow-lv2);transition:background-color 150ms cubic-bezier(0.2,0.7,0.2,1),color 150ms cubic-bezier(0.2,0.7,0.2,1)}
-.rq-reopener:hover{color:var(--dsw-alias-label-primary)}
-.rq-reopener:active{transform:scale(.96)}
-.rq-cardMinimized .rq-header{padding-bottom:14px}
 .rq-header{flex-shrink:0;justify-content:space-between;align-items:flex-start;gap:16px;padding:20px 16px 0 24px;display:flex}
 .rq-headingBlock{min-width:0}
 .rq-eyebrow{color:var(--dsw-alias-label-tertiary);margin-bottom:5px;font-size:11px;line-height:16px;display:flex;align-items:center;gap:6px;min-height:16px}
@@ -1133,17 +1159,16 @@ a.rq-source:hover{text-decoration:underline}
 									className: "rq-headerActions",
 									children: [
 										(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
-											label: t("nav.minimize"),
+											label: t("nav.minimize.hint"),
 											side: "bottom",
 											delayMs: 500,
 											children: (0, react_jsx_runtime.jsx)("button", {
 												type: "button",
 												className: "rq-iconButton",
 												"aria-label": t("nav.minimize"),
+												title: t("nav.minimize"),
 												disabled: busy !== null,
-												/* Seat-level minimize: release the composer, keep the
-												 * survey resumable from the floating reopener button. */
-												onClick: () => surveyStore.setMinimized(survey.sessionId, true),
+												onClick: () => { setSurveyMinimized(survey.surveyId, true); surveyStore.bump(); },
 												children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutline14, {})
 											})
 										}),
@@ -1409,30 +1434,14 @@ a.rq-source:hover{text-decoration:underline}
 				(0, react_jsx_runtime.jsx)("div", { className: "rq-draftHint", children: t("draft.hint") }),
 			] }) });
 		}
-		/** Composer occupant: the wizard for a pending survey, or the builder draft card for the conversation's active draft. */
 		/**
-		 * The way back: while a pending survey is MINIMIZED (seat released,
-		 * plain input restored), a round floating button on the right edge —
-		 * above the app's bottom-right floating controls — reopens it.
-		 * Registered under conversation.composer.dock, which only renders
-		 * inside the fallback composer bar: exactly the unclaimed state.
-		 */
-		function SurveyReopener(props) {
-			(0, react.useSyncExternalStore)(surveyStore.subscribe, surveyStore.getVersion);
-			const sessionId = props.sessionId;
-			const pending = sessionId === undefined ? undefined : surveyStore.get(sessionId);
-			if (pending === undefined || sessionId === undefined || !surveyStore.isMinimized(sessionId)) return null;
-			const t = typeof props.t === "function" ? props.t : ((key) => key);
-			return (0, react_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "rq-reopener",
-				title: t("nav.reopen"),
-				"aria-label": t("nav.reopen"),
-				onClick: () => surveyStore.setMinimized(sessionId, false),
-				children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconQuestionOutline14, { size: 18 })
-			});
-		}
-
+		* Composer occupant: the wizard for a pending survey, or the builder
+		* draft card for the conversation's active draft. Either way the claim
+		* is a COLUMN, not an orphan container: the ambient input dock (todo
+		* pill / tracking board / goal bar) renders above the card with the
+		* composer stack's own rhythm — the composer zone keeps its shape,
+		* only the input card is replaced.
+		*/
 		function SurveyComposer(props) {
 			// Live draft data: the platform's matched prop can lag a
 			// draft/updated frame, so a draft seat re-derives from the store on
@@ -1454,23 +1463,66 @@ a.rq-source:hover{text-decoration:underline}
 			// has nothing to claim — guard BOTH, or the key read crashes and
 			// React unmounts the whole composer seat.
 			if (matched == null) return null;
-			// The election can lag one render behind a minimize toggle (the
-			// chain re-elects on its next pass): decline here so the seat
-			// never shows a minimized survey's wizard.
-			if (matched.surveyId !== undefined && surveyStore.isMinimized(matched.sessionId)) return null;
+			// The ambient dock re-render (authorized by the entry's children
+			// declaration): renderSlot is absent in bare-mount harnesses, so
+			// the column degrades to the card alone.
+			const dock = typeof props.renderSlot === "function"
+				? props.renderSlot("conversation.input.dock", { session: props.session })
+				: null;
 			// Draft frames (builder card) carry slug; survey entries carry surveyId.
 			if (matched.surveyId === undefined) {
-				return (0, react_jsx_runtime.jsx)(SurveyBoundary, {
-					t: props.t,
-					key: `draft-${String(matched.slug)}`,
-					children: (0, react_jsx_runtime.jsx)(DraftCard, { draft: matched, t: props.t }),
+				return (0, react_jsx_runtime.jsxs)("div", {
+					className: "rq-claim",
+					children: [
+						dock,
+						(0, react_jsx_runtime.jsx)(SurveyBoundary, {
+							t: props.t,
+							key: `draft-${String(matched.slug)}`,
+							children: (0, react_jsx_runtime.jsx)(DraftCard, { draft: matched, t: props.t }),
+						}),
+					],
 				});
 			}
 			// key by surveyId so a follow-up survey in the same session remounts with fresh drafts
-			return (0, react_jsx_runtime.jsx)(SurveyBoundary, {
-				t: props.t,
-				key: matched.surveyId,
-				children: (0, react_jsx_runtime.jsx)(SurveyFlow, { survey: matched, t: props.t, key: matched.surveyId }),
+			return (0, react_jsx_runtime.jsxs)("div", {
+				className: "rq-claim",
+				children: [
+					dock,
+					(0, react_jsx_runtime.jsx)(SurveyBoundary, {
+						t: props.t,
+						key: matched.surveyId,
+						children: (0, react_jsx_runtime.jsx)(SurveyFlow, { survey: matched, t: props.t, key: matched.surveyId }),
+					}),
+				],
+			});
+		}
+		/**
+		* The reopen FAB (conversation.input.dock, first row): while a pending
+		* survey is MINIMIZED the composer is fully back to normal chat, and
+		* this one round floating affordance — right edge, above the
+		* back-to-bottom control, the attach-circle grammar — hands the
+		* composer back to the wizard. Renders null whenever no survey is
+		* minimized, which is the overwhelming majority of the time.
+		*/
+		function SurveyFab({ sessionId, t }) {
+			(0, react.useSyncExternalStore)(surveyStore.subscribe, surveyStore.getVersion);
+			if (typeof sessionId !== "string") return null;
+			const pending = surveyStore.get(sessionId);
+			if (pending === undefined || isSurveyMinimized(pending.surveyId) !== true) return null;
+			return (0, react_jsx_runtime.jsx)("div", {
+				className: "rq-fabWrap",
+				children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
+					label: t("fab.open"),
+					side: "left",
+					delayMs: 300,
+					children: (0, react_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "rq-fab",
+						"aria-label": t("fab.open"),
+						onClick: () => { setSurveyMinimized(pending.surveyId, false); surveyStore.bump(); },
+						children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconQuestionOutline14, {})
+					})
+				})
 			});
 		}
 		//#endregion
@@ -1485,46 +1537,64 @@ a.rq-source:hover{text-decoration:underline}
 		function selectSurvey({ session }) {
 			const sessionId = session?.sessionId;
 			if (sessionId === void 0) return null;
-			// A minimized pending survey releases the seat entirely — the
-			// plain input returns and the reopener button (composer dock)
-			// carries the way back. The superseded draft stays hidden too:
-			// launching a survey outranked it, and minimize must not resurrect
-			// a stale builder card.
-			if (surveyStore.isMinimized(sessionId)) return null;
-			return surveyStore.get(sessionId) ?? surveyStore.draftFor(sessionId) ?? null;
+			const pending = surveyStore.get(sessionId);
+			// MINIMIZED: the survey releases the composer entirely — the real
+			// chat input and the ambient dock return, and the dock FAB owns
+			// reopening. A builder draft may still claim the seat.
+			if (pending !== undefined && isSurveyMinimized(pending.surveyId) === true) {
+				return surveyStore.draftFor(sessionId) ?? null;
+			}
+			return pending ?? surveyStore.draftFor(sessionId) ?? null;
 		}
 		const inject = ["slots", "locale"];
 		/**
-		* Client plugin body: locale dictionaries + the composer-seat
-		* registration for the conversation composer chain (the same seat the
-		* built-in question composer occupies; the two never claim one request
-		* — this one claims its own pending surveys and its builder drafts).
+		* Client plugin body: locale dictionaries, the reopen FAB's dock row,
+		* and the composer-seat registration for the conversation composer
+		* chain (the same seat the built-in question composer occupies; the two
+		* never claim one request — this one claims its own pending surveys and
+		* its builder drafts). The entry's children declaration authorizes the
+		* claim to re-render the ambient input dock above the card.
 		*/
 		function apply(ctx) {
 			// Hydrate at activation: SSE + reconciliation poll against the
 			// host-authoritative pending table, BEFORE any UI exists. Without
 			// this, selectSurvey always sees an empty store (see start() note).
 			ctx.effect(() => surveyStore.start(), "rich-questions: survey store hydration (SSE + poll)");
-			ctx.effect(() => ctx.locale.register(NS, { zh, en }), "rich-questions: dictionaries");
+			// Dictionaries stay registered across minimize toggles; a toggle
+			// disposes + re-registers them, and each registration bumps the
+			// locale revision — which re-renders every slot outlet, so the
+			// composer chain outlet re-runs election. That release/re-claim is
+			// the whole point: store notifications alone only re-render
+			// already-mounted components, and election runs above them.
+			let disposeDicts = null;
+			ctx.effect(() => {
+				disposeDicts = ctx.locale.register(NS, { zh, en });
+				return () => { if (typeof disposeDicts === "function") disposeDicts(); };
+			}, "rich-questions: dictionaries");
+			ctx.effect(() => surveyStore.onMinimizeChange(() => {
+				try {
+					if (typeof disposeDicts === "function") disposeDicts();
+					disposeDicts = ctx.locale.register(NS, { zh, en });
+				} catch { /* unload raced the toggle; the base effect still disposes the latest handle */ }
+			}), "rich-questions: minimize re-election refresh");
+			// The reopen FAB first (dock row -1, zero-height anchor): also
+			// keeps the composer registration LAST so single-registration
+			// harnesses capture the chain entry.
+			ctx.slots.inject("conversation.input.dock", () => ctx.slots.register({
+				name: "conversation.input.dock",
+				id: "survey-fab",
+				order: -1,
+				locale: NS
+			}, SurveyFab));
 			ctx.slots.inject("conversation.composer", () => ctx.slots.register({
 				name: "conversation.composer",
 				select: selectSurvey,
-				locale: NS
-			}, SurveyComposer));
-			// The reopener rides the composer dock (list kind — coexists with
-			// the todo dock): it renders only while the fallback composer bar
-			// is on screen, which is exactly the minimized state.
-			ctx.slots.inject("conversation.composer.dock", () => ctx.slots.register({
-				name: "conversation.composer.dock",
-				order: 10,
 				locale: NS,
-				inject: (zone) => ({ sessionId: zone?.session?.sessionId })
-			}, SurveyReopener));
+				children: { "conversation.input.dock": { kind: "list", scope: "session" } }
+			}, SurveyComposer));
 		}
 		exports.apply = apply;
 		exports.inject = inject;
-		/** Test-only seam: the live store for the client smoke test. */
-		exports.__store = surveyStore;
 		return module.exports;
 	}
 });

@@ -802,7 +802,20 @@ function draftToolDefinitions(ctx, service, structureQuestionCap) {
       const spec = struct.spec
       await store.markLaunched(draft.slug)
       service.emitDraft(frameFor({ ...draft, status: 'launched' }, completeness, file))
-      const result = await service.ask({ sessionId: agent.id, spec, signal: exec.signal })
+      let result
+      try {
+        result = await service.ask({ sessionId: agent.id, spec, signal: exec.signal })
+      } catch (error) {
+        // An aborted tool run cancels the wizard (onAbort → SURVEY_CANCELLED)
+        // and the throw would skip every path below — while markLaunched has
+        // already persisted. A draft stuck at 'launched' is a dead end: the
+        // builder loop can neither relaunch it nor show anything but a hung
+        // card. Reopen it and emit the frame, then let the abort surface
+        // unchanged (the aborted run never reads the result anyway).
+        await store.reopen(draft.slug)
+        service.emitDraft(frameFor({ ...draft, status: 'reopened' }, completeness, file))
+        throw error
+      }
       if (result.outcome === 'answered') return { ...shapeAnswered(spec, result), draft: draft.slug }
       // Pre-flight redirects reopen the draft: the research investment
       // survives the user's first reaction (operator rule).

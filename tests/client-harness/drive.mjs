@@ -188,13 +188,46 @@ await flush()
 // Builder draft card: tracker-style, persists until dismissed, reappears on
 // revision change (a stale dismissal never hides active work).
 pending.length = 0 // the survey settled; the seat falls to the draft card
+// The abort/cancel dead end (operator report): a draft marked 'launched'
+// whose wizard got cancelled renders NOTHING (launched is skipped by
+// draftFor) and must not crash; once the host's reopen frame lands, the
+// card returns to the seat.
 draftsManifest = {
   v: 1,
   activeByConversation: { 'session-1': 'builder-demo' },
   drafts: {
-    'builder-demo': { status: 'building', title: 'Question Builder demo', conversationId: 'session-1', updatedAt: Date.now(), revision: 2, ready: false, progress: { questions: 12, complete: 4, missingFields: 23 } },
+    'builder-demo': { status: 'launched', title: 'Question Builder demo', conversationId: 'session-1', updatedAt: Date.now(), revision: 2, ready: false, progress: { questions: 12, complete: 4, missingFields: 23 } },
   },
 }
+document.dispatchEvent(new dom.window.Event('visibilitychange'))
+await flush()
+step('cancelled launch: empty seat, no crash, no stuck card', () => {
+  const before = errors.length
+  root.render(React.createElement(registered.Component, {
+    matched: registered.def.select({ session: { sessionId: 'session-1' } }) ?? draftsManifest.drafts['builder-demo'],
+    t,
+  }))
+  return flush().then(() => {
+    if (errors.length !== before) throw new Error(`runtime errors on dead-end render: ${errors.slice(before).join(' ;; ').slice(0, 160)}`)
+    assert(container.querySelector('.rq-draftCard') === null, 'a launched draft must not render the card')
+    assert(document.body.contains(container), 'container unmounted by dead-end render')
+  })
+})
+await flush()
+// The host-side abort fix reopens the draft — the card returns to the seat.
+draftsManifest.drafts['builder-demo'].status = 'reopened'
+draftsManifest.drafts['builder-demo'].updatedAt = Date.now()
+document.dispatchEvent(new dom.window.Event('visibilitychange'))
+await flush()
+step('reopen after a cancelled launch restores the draft card', () => {
+  root.render(React.createElement(registered.Component, { matched: draftsManifest.drafts['builder-demo'], t }))
+  return flush().then(() => {
+    assert(container.querySelector('.rq-draftCard') !== null, 'reopened draft card missing')
+  })
+})
+await flush()
+draftsManifest.drafts['builder-demo'].status = 'building'
+draftsManifest.drafts['builder-demo'].updatedAt = Date.now()
 document.dispatchEvent(new dom.window.Event('visibilitychange'))
 await flush()
 let cardMatched = registered.def.select({ session: { sessionId: 'session-1' } })

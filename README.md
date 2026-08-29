@@ -77,6 +77,14 @@ Renders in the composer seat, one question per page over the live branch path:
 - Keyboard-operable rows, aria-labelled controls; UI chrome localizes (EN / 简体中文, graceful fallback elsewhere)
 - Host-authoritative pending state, loopback-fenced routes, SSE + poll rehydration
 
+### The claim is a column, not a takeover
+
+A pending survey replaces the **input card only**. The claim re-renders the ambient input dock (todo pill, tracking board, goal bar) above the wizard card with the composer stack's own rhythm, so the composer zone keeps its shape — the chat transcript stays visible above, the context stays docked below, and nothing else in the input area is hidden.
+
+**Minimize** (the chevron in the wizard header) releases the composer entirely: the real chat input returns, and a single round floating button appears at the right edge above the back-to-bottom control (the attach-circle grammar) to reopen the survey — in-progress answers survive the round-trip through the same persistence that covers reloads. The flag clears itself when the survey settles, so a fresh ask always starts expanded.
+
+**An aborted launch never dead-ends the draft.** When a launched run is aborted (agent wall-clock, operator stop), the wizard settles `cancelled` — and the draft **reopens** (`reopened` status, frame emitted), so the builder loop can patch and relaunch instead of staring at a stuck card. Symmetrically, the client re-runs composer election on every pending-table change (requested / resolved / draft frames), so the seat claims and releases promptly even on a session with no transcript traffic.
+
 ## Authoring guide
 
 One spec, every capability:
