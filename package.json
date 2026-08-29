@@ -32,7 +32,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test \"tests/**/*.spec.js\""
+    "test": "node --test \"tests/**/*.spec.js\" tests/*.test.mjs"
   },
   "type": "module",
   "main": "src/host.js",
