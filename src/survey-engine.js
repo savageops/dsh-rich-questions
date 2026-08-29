@@ -340,9 +340,10 @@ export function validateSpec(raw, limits = {}) {
  */
 const PROSE_ESCAPE = /\\r\\n|\\n\\n|\\n(?![A-Za-z0-9])|\\r(?![A-Za-z0-9])/g
 export function repairEscapedNewlines(text) {
-  return typeof text === 'string' && text.includes('\\')
-    ? text.replace(PROSE_ESCAPE, '\n')
-    : text
+  if (typeof text !== 'string' || text.includes('\\') === false) return text
+  // Per-pair replacement preserves the newline COUNT: a literal \n\n must
+  // become a real paragraph break (two newlines), not a soft break.
+  return text.replace(PROSE_ESCAPE, (match) => (match === '\\r\\n' ? '\n' : match === '\\n\\n' ? '\n\n' : '\n'))
 }
 
 /** One-line variant: repair the escapes, then never carry a newline forward. */

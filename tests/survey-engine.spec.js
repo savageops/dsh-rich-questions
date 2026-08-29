@@ -151,7 +151,7 @@ test('validateSpec repairs literal escape sequences in prose (the flattened-intr
         ],
       },
     },
-    quick: [{ key: 'a', label: 'Quick\\nstance', description: 'd\\nmore', insight: 'p\\nc', answers: { q1: { selected: ['a'] } } }],
+    quick: [{ key: 'a', label: 'Quick\\nstance', description: 'd\\nmore', insight: 'p\\n- c', answers: { q1: { selected: ['a'] } } }],
   }
   const check = validateSpec(spec)
   assert.equal(check.ok, true)
@@ -164,7 +164,7 @@ test('validateSpec repairs literal escape sequences in prose (the flattened-intr
   assert.equal(a.insight, '**Promise** p\n**Price** c\n**Present** t')
   assert.equal(b.insight, 'Real newline\nkept as-is', 'real newlines pass through untouched')
   assert.equal(check.spec.quick[0].label, 'Quick\\nstance', 'letter-followed escape stays literal in quick labels too')
-  assert.equal(check.spec.quick[0].insight, 'p\nc')
+  assert.equal(check.spec.quick[0].insight, 'p\n- c', 'list-row escapes convert (structure follows the escape)')
   // Ids and branch wiring are untouched by the repair.
   assert.equal(check.spec.entry, 'q1')
   assert.equal(check.spec.questions.q1.options[0].key, 'a')
