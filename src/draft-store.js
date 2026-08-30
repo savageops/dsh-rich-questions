@@ -34,7 +34,7 @@ export function slugifyTitle(title) {
  *   machine-local under the profile root.
  * @returns {object} the draft store API (begin / patch / structure / get / list / markLaunched / reopen / discard).
  */
-export function createDraftStore({ workspaceRoot, profileRoot, structureQuestionCap = 40 }) {
+export function createDraftStore({ workspaceRoot, profileRoot, structureQuestionCap = 150 }) {
   const draftsDir = workspaceRoot !== undefined
     ? join(workspaceRoot, '.dsh', 'survey-drafts')
     : join(profileRoot, 'rich-questions', 'drafts', 'files')
@@ -142,16 +142,37 @@ export function createDraftStore({ workspaceRoot, profileRoot, structureQuestion
   const patchOp = async ({ conversationId, slug, questions, intro, quick }) => {
     const entries = Object.entries(questions ?? {})
     if (entries.length === 0 && intro === undefined && quick === undefined) return { ok: false, error: 'patch carries nothing — provide questions, intro, and/or quick' }
-    if (entries.length > 3) return { ok: false, error: `patch carries ${entries.length} questions — at most 3 per call (keep each payload small)` }
+    if (entries.length > 3) return { ok: false, error: `patch carries ${entries.length} questions — at most 3 per call, adds included (keep each payload small)` }
     if (intro !== undefined && typeof intro !== 'string') return { ok: false, error: 'intro must be a string (markdown first page)' }
     if (quick !== undefined && !Array.isArray(quick)) return { ok: false, error: 'quick must be an array of template objects (same shape as ask_survey quick)' }
     const draft = await readDraft(slug)
     if (draft === null) return { ok: false, error: `draft "${slug}" could not be read — it may have been deleted by hand` }
+    // Branch wiring is patchable: .next accepts a question id, an array of
+    // ids, or null (branch ends). Shape is checked here with a patch-facing
+    // message; target existence is enforced by the structure validation that
+    // runs before anything is written — a dangling id names itself there.
+    const nextShapeError = (value, where) => {
+      if (value === undefined || value === null || typeof value === 'string') return null
+      if (Array.isArray(value) && value.every((id) => typeof id === 'string')) return null
+      return `${where}.next must be a question id, an array of ids, or null (branch ends) — got ${JSON.stringify(value).slice(0, 60)}`
+    }
     const ignored = []
+    const added = []
+    const nextErrors = []
     for (const [id, patchNode] of entries) {
+      if (patchNode === null || typeof patchNode !== 'object') return { ok: false, error: `patch entry "${id}" must be an object` }
+      // NEW ids are ADDS: the node lands draft-grade (TODO stubs allowed,
+      // same leniency as begin) and then merges like any other question.
+      // Completeness gates launch, not patch — grow the graph incrementally
+      // instead of resending the whole structure.
+      if (draft.survey.questions[id] === undefined) {
+        draft.survey.questions[id] = stubIn({ questions: { [id]: patchNode } }).questions[id]
+        added.push(id)
+      }
       const node = draft.survey.questions[id]
-      if (node === undefined) return { ok: false, error: `patch names question "${id}" which does not exist in draft "${slug}" — add it via the structure op` }
-      if (patchNode.next !== undefined) ignored.push(`${id}.next`)
+      const nodeNextError = nextShapeError(patchNode.next, id)
+      if (nodeNextError !== null) nextErrors.push(nodeNextError)
+      if (patchNode.next !== undefined) node.next = patchNode.next
       if (Array.isArray(patchNode.options)) {
         // Per-field merge against the existing option at the same index,
         // over the LONGER of the two lists: an option patch carries only
@@ -176,9 +197,11 @@ export function createDraftStore({ workspaceRoot, profileRoot, structureQuestion
             nextOptions.push(previous[index] ?? { label: `TODO: label ${index + 1}` })
             continue
           }
-          if (option.next !== undefined) ignored.push(`${id}.options[${index}].next`)
+          const optionNextError = nextShapeError(option.next, `${id}.options[${index}]`)
+          if (optionNextError !== null) nextErrors.push(optionNextError)
           const { next, ...content } = option
           const merged = { ...(previous[index] ?? {}), ...content }
+          if (option.next !== undefined) merged.next = option.next
           nextOptions.push({
             ...merged,
             label: typeof merged.label === 'string' && merged.label.trim() !== '' ? merged.label : previous[index]?.label ?? `TODO: label ${index + 1}`,
@@ -193,10 +216,18 @@ export function createDraftStore({ workspaceRoot, profileRoot, structureQuestion
         if (patchNode[field] !== undefined) node[field] = patchNode[field]
       }
     }
+    if (nextErrors.length > 0) return { ok: false, error: `patch refused: ${nextErrors.join('; ')}` }
+    // Adds respect the structure cap: the graph grows only while under it.
+    if (added.length > 0) {
+      const total = Object.keys(draft.survey.questions).length
+      if (total >= structureQuestionCap) {
+        return { ok: false, error: `patch refused: adding ${added.join(', ')} would bring the graph to ${total} questions — the cap is ${structureQuestionCap}` }
+      }
+    }
     if (intro !== undefined) draft.survey.intro = intro
     if (quick !== undefined) draft.survey.quick = quick
     const struct = checkStructure(draft.survey)
-    if (!struct.ok) return { ok: false, error: `${struct.error} (patch rolled back nothing: fix the reported fields and re-send)` }
+    if (!struct.ok) return { ok: false, error: `${struct.error} (patch changed nothing on disk: fix the reported fields and re-send)` }
     draft.survey = struct.spec
     draft.updatedAt = Date.now()
     await writeDraft(draft)
@@ -210,7 +241,15 @@ export function createDraftStore({ workspaceRoot, profileRoot, structureQuestion
       manifest.drafts[slug].progress = draftCompleteness(draft.survey).totals
       await writeManifest(manifest)
     }
-    return { ok: true, draft, completeness: draftCompleteness(draft.survey), active, file: fileLabel(slug), ...(ignored.length > 0 ? { ignored } : {}) }
+    return {
+      ok: true,
+      draft,
+      completeness: draftCompleteness(draft.survey),
+      active,
+      file: fileLabel(slug),
+      ...(added.length > 0 ? { added } : {}),
+      ...(ignored.length > 0 ? { ignored } : {}),
+    }
   }
 
   const structureOp = async ({ conversationId, slug, survey }) => {
@@ -218,10 +257,15 @@ export function createDraftStore({ workspaceRoot, profileRoot, structureQuestion
     if (!struct.ok) return struct
     const count = Object.keys(struct.spec.questions).length
     if (count >= structureQuestionCap) {
-      return { ok: false, error: `structure refused: the incoming graph has ${count} questions and the cap is ${structureQuestionCap} (drafts freeze for structure edits at the cap) — content patches continue to work` }
+      return { ok: false, error: `structure refused: the incoming graph has ${count} questions and the cap is ${structureQuestionCap} (whole-graph replacement works while the graph stays under the cap) — patch adds and content patches continue to work at any size` }
     }
     const draft = await readDraft(slug)
     if (draft === null) return { ok: false, error: `draft "${slug}" could not be read — it may have been deleted by hand` }
+    // The title is durable truth: a reshape that omits it (typical — the
+    // graph is what changed) keeps the draft's title instead of losing it.
+    if (typeof struct.spec.title !== 'string' || struct.spec.title.trim() === '') {
+      struct.spec.title = draft.title
+    }
     draft.survey = struct.spec
     draft.revision += 1
     draft.updatedAt = Date.now()

@@ -5,8 +5,7 @@
  * collects the /events SSE frames the routes would stream to the browser.
  */
 import assert from 'node:assert/strict'
-import { mkdtemp } from 'node:fs/promises'
-import { readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { apply } from '../src/host.js'
@@ -47,16 +46,42 @@ await eventsRoute.handler(
 const exec = { agent, signal: new AbortController().signal }
 const fiveKeys = ['a', 'b', 'c', 'd', 'e']
 
+// Schema-true outputs (operator bug report 2026-08-30: summarize returned a
+// bare grounding STRING against the shared object schema, so every set-op
+// succeeded on disk and then failed harness output validation — the model
+// retried blind nine times). Walk each result against the tool's declared
+// schema so value/schema drift in the same file can never ship silently.
+const checkAgainstSchema = (schema, value, path) => {
+  if (value === undefined || value === null) return
+  if (schema.type === 'object') {
+    assert.equal(typeof value, 'object', `${path} must be an object`)
+    for (const [key, sub] of Object.entries(schema.properties ?? {})) checkAgainstSchema(sub, value[key], `${path}.${key}`)
+    return
+  }
+  if (schema.type === 'array') {
+    assert.ok(Array.isArray(value), `${path} must be an array`)
+    for (const [index, item] of value.entries()) checkAgainstSchema(schema.items ?? { type: 'string' }, item, `${path}[${index}]`)
+    return
+  }
+  if (schema.type === 'integer') { assert.ok(Number.isInteger(value), `${path} must be an integer`); return }
+  assert.equal(typeof value, schema.type, `${path} must be a ${schema.type}`)
+}
+const expectValidOutput = (toolName, result) => checkAgainstSchema(byName.get(toolName).output.schema, result, `${toolName} result`)
+
 const begun = await byName.get('survey_draft_set').execute({ op: 'begin', title: 'Drive Test', survey: { entry: 'q1', questions: { q1: { options: fiveKeys.map((key) => ({ key })) } } } }, exec)
+expectValidOutput('survey_draft_set', begun)
 assert.equal(begun.slug, 'drive-test')
 assert.equal(begun.completeness.ready, false)
+assert.equal(begun.grounding.mode, 'standard', 'grounding rides as an object (schema-true)')
 assert.ok(frames.some((chunk) => chunk.includes('draft/updated') && chunk.includes('drive-test')), 'begin did not emit a draft frame')
 
 const patched = await byName.get('survey_draft_set').execute({ op: 'patch', questions: { q1: { prompt: 'Pick?', options: fiveKeys.map((key) => ({ key, label: `L${key}`, description: 'd', insight: 'i', sources: ['src/draft-store.js'] })) } } }, exec)
+expectValidOutput('survey_draft_set', patched)
 assert.equal(patched.completeness.ready, true)
 assert.equal(patched.revision, 0)
 
 const got = await byName.get('survey_draft_get').execute({}, exec)
+expectValidOutput('survey_draft_get', got)
 assert.equal(got.slug, 'drive-test')
 assert.equal(got.completeness.incomplete.length, 0)
 
@@ -69,7 +94,39 @@ await assert.rejects(
 )
 
 const structured = await byName.get('survey_draft_set').execute({ op: 'structure', survey: { entry: 'q1', questions: { q1: { prompt: 'P?', options: fiveKeys.map((key) => ({ key, label: `L${key}`, description: 'd', insight: 'i', sources: ['src/draft-store.js'] })) } } } }, exec)
+expectValidOutput('survey_draft_set', structured)
 assert.equal(structured.revision, 1)
+
+// file=: the payload rides on disk — write once, iterate ops against the
+// path; inline fields win; paths outside the workspace refuse.
+await writeFile(join(workspaceRoot, 'push-structure.json'), JSON.stringify({
+  survey: { entry: 'q1', questions: { q1: { prompt: 'From file?', options: fiveKeys.map((key) => ({ key, label: `L${key}`, description: 'd', insight: 'i', sources: ['src/draft-store.js'] })) } } },
+}))
+const viaFile = await byName.get('survey_draft_set').execute({ op: 'structure', slug: 'drive-test', file: 'push-structure.json' }, exec)
+expectValidOutput('survey_draft_set', viaFile)
+assert.equal(viaFile.revision, 1, 'file-carried structure bumps the revision like an inline one')
+assert.equal(viaFile.title, 'Drive Test')
+const fromDisk = JSON.parse(await readFile(join(workspaceRoot, '.dsh', 'survey-drafts', 'drive-test.json'), 'utf8'))
+assert.equal(fromDisk.survey.questions.q1.prompt, 'From file?')
+const inlineWins = await byName.get('survey_draft_set').execute({
+  op: 'structure',
+  slug: 'drive-test',
+  file: 'push-structure.json',
+  survey: { entry: 'q1', questions: { q1: { prompt: 'Inline wins?', options: fiveKeys.map((key) => ({ key, label: `L${key}`, description: 'd', insight: 'i', sources: ['src/draft-store.js'] })) } } },
+}, exec)
+assert.equal(inlineWins.revision, 2)
+const afterInline = JSON.parse(await readFile(join(workspaceRoot, '.dsh', 'survey-drafts', 'drive-test.json'), 'utf8'))
+assert.equal(afterInline.survey.questions.q1.prompt, 'Inline wins?', 'inline fields must win over file fields')
+await assert.rejects(
+  () => byName.get('survey_draft_set').execute({ op: 'structure', file: '../escape.json' }, exec),
+  (error) => error.code === 'SURVEY_DRAFT_BAD_FILE' && /inside the workspace/.test(error.message),
+  'file= must refuse paths outside the workspace',
+)
+await assert.rejects(
+  () => byName.get('survey_draft_set').execute({ op: 'structure', file: 'missing-payload.json' }, exec),
+  (error) => error.code === 'SURVEY_DRAFT_BAD_FILE' && /could not be read/.test(error.message),
+  'file= must name unreadable files in the error',
+)
 
 const discarded = await byName.get('survey_draft_set').execute({ op: 'discard' }, exec)
 assert.equal(discarded.status, 'discarded')
@@ -145,7 +202,7 @@ assert.ok(Array.isArray(record.answers) && record.answers.length === 1, 'settled
 const recs = await byName.get('survey_records').execute({ query: 'drive' }, exec)
 assert.equal(recs.count, 1)
 assert.equal(recs.records[0].title, 'Drive Test')
-assert.equal(recs.records[0].answers[0].prompt, 'Pick?')
+assert.equal(recs.records[0].answers[0].prompt, 'Inline wins?')
 assert.equal(recs.records[0].answers[0].selected[0], 'La')
 const recsAll = await byName.get('survey_records').execute({}, exec)
 assert.ok(recsAll.count >= 1, 'unqueried read lists recent records')
@@ -183,7 +240,7 @@ await assert.rejects(
   'launch must refuse an ungrounded draft with the comparison diagnostic',
 )
 const internalBegun = await byName.get('survey_draft_set').execute({ op: 'begin', title: 'Shallow Internal', grounding: 'internal', survey: shallowSkeleton() }, exec)
-assert.equal(internalBegun.grounding, 'internal')
+assert.equal(internalBegun.grounding.mode, 'internal')
 const internalLaunch = byName.get('survey_draft_launch').execute({}, exec)
 internalLaunch.catch(() => {}) // settles below via the action route
 await new Promise((resolve) => setImmediate(resolve))

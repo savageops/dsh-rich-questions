@@ -11,7 +11,7 @@ The announcement carries the summary; this skill carries the depth, including th
 
 1. **RESEARCH** — 9-12 comparable systems before locking structure. Artifacts: findings → `.docs/research/`, digests → `.docs/digest/`, competitor UI/API rips → `.docs/research/rips/`, downloaded source → `.refs/`. Not written down = did not happen.
 2. **BEGIN** — `survey_draft_set op=begin`: skeleton with ids, ≥5 option keys per question, branch wiring. Stubs allowed.
-3. **ENRICH** — loop [research → `op=patch` (≤3 questions/call; option fields merge per-field — send only what changes)].
+3. **ENRICH** — loop [research → `op=patch` (≤3 questions/call; per-field merge — send only what changes; `.next` rewiring is patchable; NEW ids land as draft-grade adds)]. Big graphs: `file:` points any op at a workspace JSON payload — write once, re-run after errors.
 4. **VERIFY** — `survey_draft_get` zero gaps (the gate).
 5. **LAUNCH** — `survey_draft_launch`; the wizard takes the composer.
 6. **HONOR** — mirror-back, receipts, no re-asking (`survey_records` before authoring).

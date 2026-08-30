@@ -18,7 +18,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { resolve, relative, isAbsolute, join } from 'node:path'
 import { computePath, draftCompleteness, groundingGaps, resolveSurveyArgument, validateAnswers, validateSpec } from './survey-engine.js'
 import { createDraftStore } from './draft-store.js'
 
@@ -76,7 +76,7 @@ function draftStoreFor(exec, structureQuestionCap) {
 const ANNOUNCEMENT_EN = [
   "dsh-rich-questions plugin — the rich survey system: ask_survey (direct) plus the draft builder (survey_draft_set / survey_draft_get / survey_draft_launch). This doctrine exists so every survey you issue is golden-standard: deeply researched, plainly spoken, worth the user’s full attention. The tool descriptions repeat the critical bar at the moment you author; this section carries the loop, the rules, and the why.",
   "WHEN — 4+ questions, or any branching (an answer decides what gets asked next), or options needing more than one sentence of explanation → ask_survey. 1-3 simple confirmations → ask_user_question. 10+ questions or research-backed work → the BUILDER loop, never one giant call: big surveys authored in a single payload are how shallow surveys happen.",
-  "THE LOOP (commanded, research-first) — (1) RESEARCH: before locking any structure, study 9-12 comparable systems — competing tools, products, open-source repositories, internal precedents. Write it down or it did not happen: findings → .docs/research/, condensed digests → .docs/digest/, captured competitor UI/API traces → .docs/research/rips/, downloaded competitor source → .refs/. (2) BEGIN: survey_draft_set op=begin locks the skeleton (entry, question ids, ≥5 option keys per question; TODO stubs allowed). (3) ENRICH: loop [research → survey_draft_set op=patch, at most 3 questions per call] until survey_draft_get reports zero gaps; reshaping the structure goes through op=structure (bumps the revision). (4) VERIFY: survey_draft_get is the launch gate — the checklist must come back empty. (5) LAUNCH: survey_draft_launch; the wizard takes the composer seat and the tool waits with the user. (6) HONOR: see THE FEEL.",
+  "THE LOOP (commanded, research-first) — (1) RESEARCH: before locking any structure, study 9-12 comparable systems — competing tools, products, open-source repositories, internal precedents. Write it down or it did not happen: findings → .docs/research/, condensed digests → .docs/digest/, captured competitor UI/API traces → .docs/research/rips/, downloaded competitor source → .refs/. (2) BEGIN: survey_draft_set op=begin locks the skeleton (entry, question ids, ≥5 option keys per question; TODO stubs allowed). (3) ENRICH: loop [research → survey_draft_set op=patch, at most 3 questions per call] until survey_draft_get reports zero gaps. patch also ADDS new question ids (draft-grade TODO stubs) and rewires .next branch targets (question and option level) — grow the graph incrementally, no whole-structure resend; whole-graph reshapes go through op=structure (works while the graph stays under 150 questions; bumps the revision). Big payloads: point any op at a workspace JSON file via file= instead of inlining — write it once, re-run the same call after errors. (4) VERIFY: survey_draft_get is the launch gate — the checklist must come back empty. (5) LAUNCH: survey_draft_launch; the wizard takes the composer seat and the tool waits with the user. (6) HONOR: see THE FEEL.",
   "THE BAR (every survey; no exceptions) — 1. Orienting intro: what this decides, why now, what happens with the answers, roughly how long. 2. Self-contained prompts: define every term where it is used, say where it applies and what the answer changes — a reader who missed the conversation must understand the question standing alone. 3. ≥5 stance-differentiated options per option-bearing question: positions a reader could actually defend — never filler, never “Option A”; the free-text row is an escape hatch, not an option. 4. Deep insight ROWS: every judgment option’s insight is 3-5 markdown list rows, one specific checkable point per row, each led by a content label (Pattern / Proven at / Breaks when / Here now / Evidence — labels vary with the content, never a fixed generic triple). Minimum per insight: one row names a real-world proven use (system/product/repo + outcome), one row states the tradeoff or break condition, one row gives the current-state handle (file path / number / record). A one-word-label row — 'Proven: X' with no who or where — is as shallow as a paragraph; depth lives in the specifics. 5. Branch-or-justify: if an answer should change what gets asked next, there MUST be a branch; a flat sequence where the answer obviously matters is a defect. 6. One language: every user-facing string in the user’s chat language (English chat → English survey, 中文对话 → 中文问卷); option keys stay short ASCII (a, b, c…). 7. Proportionality: tiny confirmations may be lighter (2-4 options, short prompts) — but self-contained prompts and honest options are the floor everywhere.",
   "WORKED INSIGHT ROWS (imitate this shape — one bold-labeled point per row) — for the option 'Gate-time check only' (a memory design): \n- **Proven:** gate-time reads are how ui-sidebar resolves per-session data in production. \n- **Costs:** the author re-checks settled records manually before every survey. \n- **Here now:** `survey_records` (v0.3.0) reads ~/.dsh/rich-questions/surveys/; no gate exists yet.",
   "THE FEEL (handling the human — this is why the tool earns trust) — MIRROR-BACK: the moment results return, open your next turn by restating the user’s stance in one line — “You chose X over Y because Z, so I will…”. Answers must feel heard before they are used. FOLLOW-THROUGH RECEIPT: when a decision lands, trace it to its answer (“Q3 → picked A → therefore…”); surveys that visibly change things get answered quickly next time. NO RE-ASKING: call survey_records (the settled-record reader) and check this session’s history before asking anything already answered — re-asking says nobody was listening. SOLICIT THE WHY: when an answer surprises you, ask for the reason (the wizard’s inline justify affordance, or chat) — a stated why is intent you can act on.",
@@ -88,7 +88,7 @@ const ANNOUNCEMENT_EN = [
 const ANNOUNCEMENT_ZH = [
   "dsh-rich-questions 插件——富问卷系统：ask_survey（直接发起）+ 问卷构建器（survey_draft_set / survey_draft_get / survey_draft_launch）。本守则的存在目的：让你发出的每份问卷都是金标准——研究扎实、语言干净、值得用户认真作答。工具描述会在你动笔那一刻重复关键底线；本节承载流程、规则与理由。",
   "何时用——≥4 题、或存在分支（某个答案决定接下来问什么）、或选项需要超过一句的解释 → ask_survey。1-3 个简单确认 → ask_user_question。≥10 题或需要研究支撑的问卷 → 一律走构建器循环，绝不用一次巨型调用：单次写完的大问卷正是浅问卷的来源。",
-  "构建循环（强制，研究先行）——(1) 研究：锁定结构之前，先研究 9-12 个同类系统（竞品工具、产品、开源仓库、内部先例）。不落盘的研究等于没做：研究发现 → .docs/research/；精炼摘要 → .docs/digest/；抓取的竞品 UI/API 痕迹 → .docs/research/rips/；下载的竞品源码 → .refs/。(2) 起稿：survey_draft_set op=begin 锁骨架（entry、题目 id、每题 ≥5 个选项 key；允许 TODO 占位）。(3) 充实：循环〔研究 → survey_draft_set op=patch（每次 ≤3 题）〕直到 survey_draft_get 零缺口；改结构走 op=structure（revision+1）。(4) 校验：survey_draft_get 是发射闸门——清单必须清零。(5) 发射：survey_draft_launch；向导接管输入区，工具与用户一起等待。(6) 兑现：见「对人的分寸」。",
+  "构建循环（强制，研究先行）——(1) 研究：锁定结构之前，先研究 9-12 个同类系统（竞品工具、产品、开源仓库、内部先例）。不落盘的研究等于没做：研究发现 → .docs/research/；精炼摘要 → .docs/digest/；抓取的竞品 UI/API 痕迹 → .docs/research/rips/；下载的竞品源码 → .refs/。(2) 起稿：survey_draft_set op=begin 锁骨架（entry、题目 id、每题 ≥5 个选项 key；允许 TODO 占位）。(3) 充实：循环〔研究 → survey_draft_set op=patch（每次 ≤3 题）〕直到 survey_draft_get 零缺口。patch 也能新增题目 id（允许 TODO 占位）与改接 .next 分支（题目级与选项级）——增量扩展图，无需整图重发；整图重构走 op=structure（150 题以内可用；revision+1）。大负载：用 file= 指向工作区 JSON 文件——写一次，出错后原样重跑即可。(4) 校验：survey_draft_get 是发射闸门——清单必须清零。(5) 发射：survey_draft_launch；向导接管输入区，工具与用户一起等待。(6) 兑现：见「对人的分寸」。",
   "质量底线（每份问卷，无例外）——1. 导语定锚：这决定什么、为何是现在、答案怎么用、大约多久。2. 自包含题干：术语就地定义、说明适用位置与答案会改变什么——错过上下文的读者也能独立看懂。3. 每题 ≥5 个有立场差异的选项：读者真的可能选的立场——绝不凑数，绝不用「选项A」；自由文本行是逃生门，不算选项。4. 深度洞察行：每个判断型选项的 insight 排成 3-5 行（markdown 列表，一行一个具体可查证的观点，标签随内容而定：Pattern / Proven at / Breaks when / Here now / Evidence）。每条 insight 至少包含：一行给出真实世界的成功使用（系统/产品/仓库 + 结果）、一行讲清代价或失效条件、一行给出现状抓手（文件路径 / 数字 / 记录）。只有「Proven: X」一个词的行和整段文字一样浅——深度在具体细节里。5. 有分支或说明理由：某个答案理应改变后续提问时，必须有分支；答案明显重要却拍平成序列就是缺陷。6. 语言一致：所有用户可见文案用用户当前聊天语言（中文对话 → 中文问卷）；选项 key 一律短 ASCII（a、b、c…）。7. 比例原则：极小确认可以更轻（2-4 个选项、短题干）——但自包含题干与诚实选项是处处生效的底线。",
   "洞察行示例（照此形状，一行一个加粗标签）——选项「Gate-time check only」（memory 设计）：\n- **Proven:** 门时读取是 ui-sidebar 在生产环境中解析会话数据的方式。\n- **Costs:** 作者在每份问卷前要手动复查已归档记录。\n- **Here now:** `survey_records`（v0.3.0）已能读取 ~/.dsh/rich-questions/surveys/；门禁尚不存在。",
   "对人的分寸（这是工具赢得信任的原因）——镜子回应：结果一返回，下一轮第一句先复述用户立场（「你选了 X 而不是 Y，因为 Z，所以我会……」）。答案必须先被听见，再被使用。落实回执：每个决定落地时追溯到来源（「第3题 → 选了 A → 因此……」）；看得见改变的问卷，下次才会被认真填。不重复追问：先调用 survey_records（已归档问卷读取器）并查本会话历史，问过的绝不重问——重问等于没人听。追问理由：答案出乎意料时，追问为什么（向导内的理由输入，或在对话里问）——说出口的理由就是可执行的意图。",
@@ -622,6 +622,37 @@ function surveyToolDefinition(ctx, service) {
  * then the wizard, with reopen-on-reroll). Every successful op emits a
  * draft/updated SSE frame so the client draft card stays live.
  */
+/**
+ * Read a JSON payload file for survey_draft_set (workspace-relative; inline
+ * args win over file fields). Big graphs stop being re-emission pain: the
+ * model writes the file once with its file tool and re-runs the SAME op call
+ * after any error — the payload is read fresh from disk every time.
+ * @param {string} file - workspace-relative path to a JSON object file.
+ * @param {object} exec - tool exec context (owning agent session).
+ * @returns {Promise<object>} the parsed payload object.
+ */
+async function loadSurveyPayloadFile(file, exec) {
+  const cwd = exec.agent?.session?.header?.cwd
+  if (typeof cwd !== 'string' || cwd === '') throw new SurveyError('survey_draft_set file= needs a session workspace to resolve the path against', 'SURVEY_DRAFT_BAD_FILE')
+  const resolved = resolve(cwd, file)
+  const inside = relative(cwd, resolved)
+  if (inside.startsWith('..') || isAbsolute(inside)) throw new SurveyError(`survey_draft_set file "${file}" must live inside the workspace (${cwd})`, 'SURVEY_DRAFT_BAD_FILE')
+  let text
+  try {
+    text = await readFile(resolved, 'utf8')
+  } catch {
+    throw new SurveyError(`survey_draft_set file "${file}" could not be read (resolved: ${resolved})`, 'SURVEY_DRAFT_BAD_FILE')
+  }
+  let parsed
+  try {
+    parsed = JSON.parse(text)
+  } catch (error) {
+    throw new SurveyError(`survey_draft_set file "${file}" is not valid JSON: ${error instanceof Error ? error.message : String(error)}`, 'SURVEY_DRAFT_BAD_FILE')
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) throw new SurveyError(`survey_draft_set file "${file}" must carry a JSON object`, 'SURVEY_DRAFT_BAD_FILE')
+  return parsed
+}
+
 function draftToolDefinitions(ctx, service, structureQuestionCap) {
   // Draft lifecycle tools return structured objects in every success path:
   // summaries, checklist reads, and launched survey outcomes. Keep one
@@ -644,6 +675,7 @@ function draftToolDefinitions(ctx, service, structureQuestionCap) {
         draftReopened: { type: 'boolean' },
         completeness: { type: 'object' },
         grounding: { type: 'object' },
+        added: { type: 'array', items: { type: 'string' } },
         ignored: { type: 'array', items: { type: 'string' } },
       },
     },
@@ -666,7 +698,11 @@ function draftToolDefinitions(ctx, service, structureQuestionCap) {
     title: result.draft.title,
     status: result.draft.status,
     revision: result.draft.revision,
-    grounding: result.draft.grounding ?? 'standard',
+    // Schema-true (operator bug report 2026-08-30): the shared output schema
+    // types grounding as an OBJECT — the mode string rode bare here and every
+    // successful set-op result was rejected by output validation while the
+    // draft had already been written: the model retried blind, nine times.
+    grounding: { mode: result.draft.grounding ?? 'standard' },
     active: true,
     file: result.file,
     completeness: {
@@ -674,11 +710,12 @@ function draftToolDefinitions(ctx, service, structureQuestionCap) {
       totals: result.completeness.totals,
       incomplete: result.completeness.perQuestion.filter((entry) => entry.missing !== undefined),
     },
+    ...(result.added !== undefined ? { added: result.added } : {}),
     ...(result.ignored !== undefined ? { ignored: result.ignored } : {}),
   })
   const setTool = {
     name: 'survey_draft_set',
-    description: 'Builder write, and the RESEARCH-FIRST LOOP in tool form: study 9-12 comparable systems BEFORE locking structure (findings to .docs/research/, condensed digests to .docs/digest/, captured competitor UI/API traces to .docs/research/rips/, downloaded competitor source to .refs/ — research that is not written down did not happen). op=begin: lock the skeleton {title, survey:{entry, questions}} — ids, >=5 option keys per option-bearing question (labels/prompts may be TODO stubs), branch wiring validated on the spot; the draft title defaults the survey title. op=patch: flesh out at most 3 questions per call — question fields and option fields MERGE per-field (send only what changes; per-option `sources` is the one exception and replaces the entire source list of that option), prose only (prompt/header/detail/multiSelect/allowCustom/skippable/options label+description+insight+sources — option next fields are structural and ignored), plus draft-level intro and quick (authored LAST over finished questions; validated immediately incl. the two-way coverage rule). op=structure: replace the whole graph while under the question cap; bumps revision — use it when research reshapes the skeleton or options must be reordered/removed. op=discard: retire the active draft. Loop [research → patch] until survey_draft_get reports zero gaps, then launch. One active draft per conversation; drafts persist as workspace files; old drafts remain.',
+    description: 'Builder write, and the RESEARCH-FIRST LOOP in tool form: study 9-12 comparable systems BEFORE locking structure (findings to .docs/research/, condensed digests to .docs/digest/, captured UI/API traces to .docs/research/rips/, downloaded competitor source to .refs/ — research that is not written down did not happen). op=begin: lock the skeleton {title, survey:{entry, questions}} — ids, >=5 option keys per option-bearing question (labels/prompts may be TODO stubs), branch wiring validated on the spot; the draft title defaults the survey title. op=patch: at most 3 questions per call, each a per-field MERGE — send only what changes. EXISTING ids: prose + option fields (label/description/insight/sources — per-option sources replaces that option\'s whole source list) AND branch wiring (question .next and option .next: a question id, an array of ids, or null = branch ends; validated against the graph on every patch). NEW ids: added as draft-grade questions (prompt/options may be TODO stubs, >=5 options) — grow the graph incrementally, no whole-structure resend. Plus draft-level intro and quick (authored LAST over finished questions; two-way coverage rule enforced). op=structure: replace the whole graph — allowed while the incoming graph stays under 150 questions; bumps revision; use when research reshapes the skeleton or options must be reordered/removed. op=discard: retire the active draft. file=: any op may point at a workspace JSON file carrying the payload fields ({title?, grounding?, survey?, questions?, intro?, quick?}) instead of inlining them — write the file once with your file tool, re-run the same call after errors, inline fields win over file fields. Loop [research → patch] until survey_draft_get reports zero gaps, then launch. One active draft per conversation; drafts persist as workspace files; old drafts remain.',
     parameters: {
       type: 'object',
       required: ['op'],
@@ -689,9 +726,10 @@ function draftToolDefinitions(ctx, service, structureQuestionCap) {
         grounding: { type: 'string', enum: ['standard', 'internal'], description: 'op=begin: grounding-bar mode. standard (default): launch requires every option to cite a source and every question to cite a comparison target (file path or URL). internal: skips the comparison half for surveys with no competitors.' },
         survey: { type: 'object', description: 'op=begin/structure: the survey skeleton {title?, intro?, entry, questions} — same shape ask_survey takes; prompts/labels may be "TODO:" stubs, structure must validate.' },
         slug: { type: 'string', description: 'op=patch/structure/discard: target draft; omit to use the conversation active draft.' },
-        questions: { type: 'object', description: 'op=patch: map of question id -> content patch {prompt?, header?, detail?, multiSelect?, allowCustom?, skippable?, options?}. Option patches MERGE per-field against the option at the same index — send only what changes, lists may be partial (untouched tail options survive); the structure op replaces options wholesale.' },
+        questions: { type: 'object', description: 'op=patch: map of question id -> content patch {prompt?, header?, detail?, multiSelect?, allowCustom?, skippable?, next?, options?}. Option patches MERGE per-field against the option at the same index — send only what changes, lists may be partial (untouched tail options survive); the structure op replaces options wholesale. next (question-level and per-option) is patchable: a question id, an array of ids, or null = branch ends; every target must exist. An id not yet in the draft is ADDED as a draft-grade question (TODO stubs allowed).' },
         intro: { type: 'string', description: 'op=patch: set the survey intro (markdown first page).' },
         quick: { type: 'array', maxItems: 6, items: { type: 'object' }, description: 'op=patch: replace the quick templates — same shape as ask_survey quick [{key, label, description?, insight?, recommended?, answers: {qid: {selected}}}]. Author them last, over finished questions.' },
+        file: { type: 'string', description: "Any op: workspace-relative path to a JSON file carrying this op's payload fields ({title?, grounding?, survey?, questions?, intro?, quick?}) instead of inlining. Built for big graphs: write the file once with your file tool, then iterate ops against the path — after an error, re-running the SAME call re-reads the file; inline fields win over file fields." },
       },
     },
     output: draftToolOutput,
@@ -699,34 +737,42 @@ function draftToolDefinitions(ctx, service, structureQuestionCap) {
       const agent = requireLiveRootAgent(ctx, exec)
       const store = draftStoreFor(exec, structureQuestionCap)
       const conversationId = agent.id
+      // file=: the payload rides on disk (inline fields win). Read BEFORE any
+      // op dispatch so every op benefits; the merged payload replaces args.
+      let payload = args
+      if (typeof args.file === 'string' && args.file !== '') {
+        const fromFile = await loadSurveyPayloadFile(args.file, exec)
+        payload = { ...fromFile, ...args }
+        delete payload.file
+      }
       const resolveSlug = async () => {
-        if (typeof args.slug === 'string' && args.slug !== '') return args.slug
+        if (typeof payload.slug === 'string' && payload.slug !== '') return payload.slug
         const active = await store.get({ conversationId })
-        if (!active.ok) throw new SurveyError(`survey_draft_set ${args.op} failed: ${active.error}`, 'SURVEY_DRAFT_MISSING')
+        if (!active.ok) throw new SurveyError(`survey_draft_set ${payload.op} failed: ${active.error}`, 'SURVEY_DRAFT_MISSING')
         return active.draft.slug
       }
       let outcome
-      if (args.op === 'begin') {
-        if (typeof args.survey !== 'object' || args.survey === null) throw new SurveyError('survey_draft_set op=begin requires survey {entry, questions}', 'SURVEY_DRAFT_BAD_OP')
-        outcome = await store.begin({ conversationId, title: typeof args.title === 'string' && args.title.trim() !== '' ? args.title : 'Draft survey', survey: args.survey, grounding: args.grounding })
-      } else if (args.op === 'patch') {
+      if (payload.op === 'begin') {
+        if (typeof payload.survey !== 'object' || payload.survey === null) throw new SurveyError('survey_draft_set op=begin requires survey {entry, questions}', 'SURVEY_DRAFT_BAD_OP')
+        outcome = await store.begin({ conversationId, title: typeof payload.title === 'string' && payload.title.trim() !== '' ? payload.title : 'Draft survey', survey: payload.survey, grounding: payload.grounding })
+      } else if (payload.op === 'patch') {
         const slug = await resolveSlug()
-        outcome = await store.patch({ slug, questions: args.questions, intro: args.intro, quick: args.quick })
-      } else if (args.op === 'structure') {
+        outcome = await store.patch({ slug, questions: payload.questions, intro: payload.intro, quick: payload.quick })
+      } else if (payload.op === 'structure') {
         const slug = await resolveSlug()
-        if (typeof args.survey !== 'object' || args.survey === null) throw new SurveyError('survey_draft_set op=structure requires survey {entry, questions}', 'SURVEY_DRAFT_BAD_OP')
-        outcome = await store.structure({ slug, survey: args.survey })
-      } else if (args.op === 'discard') {
+        if (typeof payload.survey !== 'object' || payload.survey === null) throw new SurveyError('survey_draft_set op=structure requires survey {entry, questions}', 'SURVEY_DRAFT_BAD_OP')
+        outcome = await store.structure({ slug, survey: payload.survey })
+      } else if (payload.op === 'discard') {
         const slug = await resolveSlug()
         outcome = await store.discard(slug)
         service.emitDraft({ conversationId, slug, status: 'discarded', updatedAt: Date.now() })
         return { op: 'discard', slug, status: 'discarded' }
       } else {
-        throw new SurveyError(`survey_draft_set received unknown op "${String(args.op)}"`, 'SURVEY_DRAFT_BAD_OP')
+        throw new SurveyError(`survey_draft_set received unknown op "${String(payload.op)}"`, 'SURVEY_DRAFT_BAD_OP')
       }
-      if (!outcome.ok) throw new SurveyError(`survey_draft_set ${args.op} failed: ${outcome.error}`, 'SURVEY_DRAFT_BAD_OP')
+      if (!outcome.ok) throw new SurveyError(`survey_draft_set ${payload.op} failed: ${outcome.error}`, 'SURVEY_DRAFT_BAD_OP')
       service.emitDraft(frameFor(outcome.draft, outcome.completeness, outcome.file))
-      return summarize(args.op, outcome)
+      return summarize(payload.op, outcome)
     },
   }
 
@@ -940,7 +986,7 @@ function recordsToolDefinition(ctx) {
 
 export function apply(ctx, config = {}) {
   const service = new SurveyHostService()
-  const structureQuestionCap = Number.isFinite(config?.structureQuestionCap) ? config.structureQuestionCap : 40
+  const structureQuestionCap = Number.isFinite(config?.structureQuestionCap) ? config.structureQuestionCap : 150
   // Manifest-only store for route/card hydration (draft files themselves are
   // resolved per-tool against the calling session's workspace).
   const manifestStore = createDraftStore({ profileRoot: pluginHome(), structureQuestionCap })

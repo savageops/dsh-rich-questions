@@ -164,17 +164,19 @@ research first                 study 9–12 comparable systems; findings → .do
                                competitor source → .refs/ — research that is not written down did not happen
 survey_draft_set op=begin      lock a full-frame skeleton (ids, ≥5 option keys, branch wiring; prompts/labels may be "TODO:" stubs)
   ↕  keep researching with your own tools
-survey_draft_set op=patch      flesh out ≤3 questions per call — prose only; the same op sets draft-level intro and quick (templates authored LAST, over finished questions, coverage-checked immediately)
+survey_draft_set op=patch      ≤3 questions per call, per-field merge. Existing ids: prose + option fields AND branch wiring (question/option `.next`: id, id array, or null). NEW ids: added as draft-grade stubs — grow the graph incrementally, no whole-structure resend. The same op sets draft-level intro and quick (templates authored LAST, coverage-checked immediately)
 survey_draft_get               the required-field checklist (per option: label, description, insight, ≥1 source) — the launch gate
 survey_draft_launch            refuses any TODO:, then starts the wizard; reroll/push/discuss REOPEN the draft
 ```
+
+Any op may point at a **workspace JSON file** (`file:`) instead of inlining its payload — write the graph once with your file tool, iterate ops against the path, re-run the same call after errors (inline fields win). Built for Push-scale graphs where re-emitting a 200-option payload per attempt is the failure mode.
 
 The loop is commanded, not suggested: research → patch → get until the gate is clean, then launch. Results carry a `handling` contract — mirror the user's stance back in one line, trace decisions to answers, never re-ask what a survey already answered.
 
 Rules worth knowing:
 
 - **Drafts are files.** `.dsh/survey-drafts/<slug>.json` in the session workspace (git-diffable; old drafts remain as reference) with a machine-local manifest under `~/.dsh/rich-questions/drafts/index.json` (statuses, one active draft per conversation). No workspace? Drafts fall back machine-local.
-- **Soft structure lock.** `op=structure` (whole-graph replace) is allowed while the draft is under `structureQuestionCap` (cordis config, default 40); each use bumps a revision counter. Content patches always work, even under the freeze.
+- **Soft structure lock.** `op=structure` (whole-graph replace) is allowed while the incoming graph is under `structureQuestionCap` (cordis config, default **150** — the same ceiling as `ask_survey`, so the Push mandate's 2×-depth math from any launchable survey always fits); each use bumps a revision counter and **preserves the draft title** when the incoming graph omits it. Patch adds and content patches continue at any size.
 - **Required, not blocked.** Every option's label/description/insight/sources and every prompt are required fields — `get` lists every gap continuously; launch is the only enforcement point.
 - **The draft card owns the input's space.** A tracker-style progress card claims the composer seat while building — the same in-space contract the launched wizard has (progress bar, counts, revision). Dismissal collapses it to a one-line strip in the seat (never an empty seat, never a dock row under the input), and a stale dismissal — any revision or status change — re-expands the full card. On launch the wizard takes the seat; the card closes into it.
 - **No expiration.** Pending surveys wait indefinitely — the TTL sweeper is gone. The only settle paths are the user's own actions (answer / cancel / preflight) or a turn abort.

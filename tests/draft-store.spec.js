@@ -96,7 +96,7 @@ test('ops on a missing draft file fail with a draft-facing error, not ENOENT', a
   assert.match(structured.error, /could not be read/)
 })
 
-test('patch completes content, refuses >3 questions, unknown ids, and reports ignored next fields', async () => {
+test('patch completes content, refuses >3 questions, ADDS new ids, and wires next targets', async () => {
   const { store } = await freshStore()
   const { draft } = await store.begin({ conversationId: 'conv-1', title: 'T', survey: skeleton() })
   const patched = await store.patch({ slug: draft.slug, questions: { q1: fleshed() } })
@@ -107,13 +107,54 @@ test('patch completes content, refuses >3 questions, unknown ids, and reports ig
   const tooMany = await store.patch({ slug: draft.slug, questions: { a: {}, b: {}, c: {}, d: {} } })
   assert.match(tooMany.error, /at most 3 per call/)
 
-  const unknown = await store.patch({ slug: draft.slug, questions: { nope: { prompt: 'x' } } })
-  assert.match(unknown.error, /does not exist in draft/)
+  // NEW ids land as draft-grade adds (TODO stubs allowed) — incremental
+  // growth instead of a whole-structure resend.
+  const added = await store.patch({ slug: draft.slug, questions: { q9: { prompt: 'Fresh?', options: fiveKeys.map((key) => ({ key, label: `L${key}` })) } } })
+  assert.equal(added.ok, true)
+  assert.deepEqual(added.added, ['q9'])
+  assert.equal(added.draft.survey.questions.q9.prompt, 'Fresh?')
+  assert.equal(added.draft.revision, 0, 'adds never bump the structure revision')
 
-  const structural = await store.patch({ slug: draft.slug, questions: { q1: { prompt: 'Again?', options: fiveKeys.map((key) => ({ key, label: `L${key}`, description: 'd', insight: 'i', sources: ['s'], next: 'q1' })) } } })
-  assert.equal(structural.ok, true)
-  assert.ok(structural.ignored.includes('q1.options[0].next'))
-  assert.equal(structural.draft.revision, 0, 'content patches never bump the structure revision')
+  // Branch wiring is patchable: question-level and option-level .next land
+  // (id, array of ids, or null = branch ends).
+  const wired = await store.patch({ slug: draft.slug, questions: { q1: { next: 'q9', options: fiveKeys.map((key) => ({ key, next: key === 'a' ? 'q9' : null })) } } })
+  assert.equal(wired.ok, true)
+  assert.equal(wired.draft.survey.questions.q1.next, 'q9')
+  assert.equal(wired.draft.survey.questions.q1.options[0].next, 'q9')
+  assert.equal(wired.draft.survey.questions.q1.options[1].next, null)
+  assert.equal(wired.ignored, undefined, 'next wiring is applied, never ignored')
+
+  // A dangling target refuses the WHOLE patch and changes nothing on disk.
+  const dangling = await store.patch({ slug: draft.slug, questions: { q1: { next: 'ghost' } } })
+  assert.equal(dangling.ok, false)
+  assert.match(dangling.error, /invalid draft structure/)
+  const stored = await store.get({ slug: draft.slug })
+  assert.equal(stored.draft.survey.questions.q1.next, 'q9', 'a refused patch must not write')
+
+  // A malformed next shape gets the patch-facing message.
+  const badShape = await store.patch({ slug: draft.slug, questions: { q1: { next: 7 } } })
+  assert.equal(badShape.ok, false)
+  assert.match(badShape.error, /q1\.next must be a question id/)
+})
+
+test('patch adds respect the structure cap', async () => {
+  const { store } = await freshStore({ structureQuestionCap: 2 })
+  const { draft } = await store.begin({ conversationId: 'conv-1', title: 'T', survey: skeleton() })
+  const refused = await store.patch({ slug: draft.slug, questions: { q2: { options: fiveKeys.map((key) => ({ key })) } } })
+  assert.equal(refused.ok, false)
+  assert.match(refused.error, /cap is 2/)
+})
+
+test('structure default cap fits the Push math: a 45-question graph lands (21 doubled)', async () => {
+  const { store } = await freshStore()
+  const { draft } = await store.begin({ conversationId: 'conv-1', title: 'T', survey: skeleton() })
+  const questions = { q1: fleshed() }
+  for (let n = 2; n <= 45; n += 1) {
+    questions[`q${n}`] = { prompt: `Q${n}?`, options: fiveKeys.map((key) => ({ key, label: `L${key}` })) }
+  }
+  const big = await store.structure({ slug: draft.slug, survey: { entry: 'q1', questions } })
+  assert.equal(big.ok, true, `45-question structure must land under the default cap: ${big.error ?? ''}`)
+  assert.equal(Object.keys(big.draft.survey.questions).length, 45)
 })
 
 test('option patches merge per-field: a sources-only patch keeps the prose', async () => {
