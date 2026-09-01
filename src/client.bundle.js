@@ -218,21 +218,28 @@ window.__ModuleLoader__.load({
 				}).catch(() => {});
 			}
 			function start() {
-				if (started || typeof window === "undefined" || typeof EventSource === "undefined") return;
-				started = true;
-				try {
-					const stream = new EventSource(`${API}/events`);
-					stream.onmessage = (event) => {
-						try { applyFrame(JSON.parse(event.data)); } catch { /* one bad frame must not kill the stream */ }
-					};
-					stream.onerror = () => { /* EventSource reconnects; the hello frame re-hydrates */ };
-				} catch { /* fall back to the poll below */ }
-				window.setInterval(poll, 20_000);
-				document.addEventListener("visibilitychange", () => {
-					if (document.visibilityState === "visible") poll();
-				});
+			if (started || typeof window === "undefined" || typeof EventSource === "undefined") return;
+			started = true;
+			// The poll is a FALLBACK, not a second stream: while SSE frames
+			// arrive, the 20s /state poll is pure redundancy (3 req/min per
+			// open tab). It re-arms only when the stream errors and pauses
+			// again on the next frame; the visibility poll stays (cheap,
+			// once per tab focus).
+			let sseHealthy = false;
+			try {
+				const stream = new EventSource(`${API}/events`);
+				stream.onmessage = (event) => {
+					sseHealthy = true;
+					try { applyFrame(JSON.parse(event.data)); } catch { /* one bad frame must not kill the stream */ }
+				};
+				stream.onerror = () => { sseHealthy = false; /* EventSource reconnects; the hello frame re-hydrates */ };
+			} catch { /* fall back to the poll below */ }
+			window.setInterval(() => { if (sseHealthy !== true) poll(); }, 20_000);
+			document.addEventListener("visibilitychange", () => {
+				if (document.visibilityState === "visible") poll();
+			});
 			}
-			return {
+return {
 				get(sessionId) { return bySession.get(sessionId); },
 				/**
 				 * The conversation's active draft frame (builder card), or
