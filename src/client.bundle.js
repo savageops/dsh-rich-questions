@@ -1409,87 +1409,70 @@ a.rq-source:hover{text-decoration:underline}
 			try { window.localStorage.removeItem(DRAFT_DISMISS_PREFIX + slug) } catch { /* best-effort */ }
 		}
 		/**
-		* Tracker-style builder progress card (operator pattern: the tracking
-		* board / goal UI), occupying the composer seat while a draft builds —
-		* the same in-space contract the launched wizard has. Dismissal
-		* collapses the card to a one-line strip IN the seat: it must never
-		* render null while claiming the composer (that left the seat empty
-		* and the chat vanished), and a stale dismissal — any revision or
-		* status change — re-expands the full card so active work is never
-		* hidden. On launch the wizard claims the seat (draft frames stop
-		* rendering), so the card closes into the wizard by construction.
+		* Builder draft strip — the ONLY draft surface. Lives inside the
+		* composer chrome (conversation.input.dock: full-width entries above
+		* the composer card), so the build stage never erases the composer's
+		* own UI: input, tools, model picker, context ring, send and the
+		* stats dock all stay. One row: eyebrow, title, status chip, inline
+		* progress, counts, dismiss. Dismissal persists per slug+revision;
+		* the next builder revision re-shows the strip. No expanded card —
+		* least repetition in UI and logic, per the operator's blend-in rule.
 		*/
-		function DraftCard({ draft, t }) {
-			const [dismissed, setDismissed] = (0, react.useState)(() => loadDraftDismissal(draft.slug));
+		function DraftDock(props) {
+			(0, react.useSyncExternalStore)(surveyStore.subscribe, surveyStore.getVersion);
+			const sessionId = props.sessionId;
+			const draft = sessionId === undefined ? undefined : surveyStore.draftFor(sessionId);
+			if (draft === undefined) return null;
+			const t = typeof props.t === "function" ? props.t : ((key) => key);
+			const [override, setOverride] = (0, react.useState)(null);
+			let collapsed = false;
+			if (override !== null && override.slug === draft.slug && override.revision === draft.revision && override.status === draft.status) {
+				collapsed = override.hidden;
+			} else {
+				const saved = loadDraftDismissal(draft.slug);
+				collapsed = saved !== null && saved.revision === draft.revision && saved.status === draft.status;
+			}
+			if (collapsed) return null;
 			const progress = draft.progress ?? {};
 			const total = typeof progress.questions === "number" ? progress.questions : 0;
 			const done = typeof progress.complete === "number" ? progress.complete : 0;
 			const missing = typeof progress.missingFields === "number" ? progress.missingFields : 0;
-			const collapsed = dismissed !== null && dismissed.revision === draft.revision && dismissed.status === draft.status;
-			if (collapsed) {
-				return (0, react_jsx_runtime.jsx)("div", { className: "rq-frame", children: (0, react_jsx_runtime.jsxs)("div", { className: "rq-draftStrip", children: [
-					(0, react_jsx_runtime.jsx)("span", { className: "rq-chip", children: t("draft.eyebrow") }),
-					(0, react_jsx_runtime.jsx)("span", { className: "rq-draftTitle", children: draft.title ?? draft.slug }),
-					(0, react_jsx_runtime.jsxs)("span", { className: "rq-draftCounts", children: [`${String(done)}/${String(total)} `, t("draft.complete")] }),
-					(0, react_jsx_runtime.jsx)("button", { type: "button", className: "rq-crashRetry", onClick: () => { clearDraftDismissal(draft.slug); setDismissed(null); }, children: t("draft.show") }),
-				] }) });
-			}
 			const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
-			const dismiss = () => {
-				const value = { revision: draft.revision, status: draft.status };
-				saveDraftDismissal(draft.slug, value);
-				setDismissed(value);
-			};
-			return (0, react_jsx_runtime.jsx)("div", { className: "rq-frame", children: (0, react_jsx_runtime.jsxs)("div", { className: "rq-draftCard", children: [
-				(0, react_jsx_runtime.jsxs)("div", { className: "rq-draftHead", children: [
-					(0, react_jsx_runtime.jsx)("span", { className: "rq-chip", children: t("draft.eyebrow") }),
-					(0, react_jsx_runtime.jsx)("span", { className: "rq-draftTitle", children: draft.title ?? draft.slug }),
-					(0, react_jsx_runtime.jsx)("span", { className: "rq-chip", children: t(`draft.status.${draft.status ?? "building"}`) }),
-					...(draft.revision !== undefined ? [(0, react_jsx_runtime.jsx)("span", { key: "rev", className: "rq-chip", children: `${t("draft.revision")} ${draft.revision}` })] : []),
-					(0, react_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "rq-iconButton",
-						"aria-label": t("draft.dismiss"),
-						title: t("draft.dismiss"),
-						onClick: dismiss,
-						children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCloseOutline16, {}),
-					}),
-				] }),
-				(0, react_jsx_runtime.jsxs)("div", { className: "rq-draftBarWrap", children: [
-					(0, react_jsx_runtime.jsx)("div", { className: "rq-bar rq-draftBar", children: (0, react_jsx_runtime.jsx)("div", { className: "rq-barFill", style: { width: `${String(pct)}%` } }) }),
-					(0, react_jsx_runtime.jsxs)("span", { className: "rq-draftCounts", children: [`${String(done)}/${String(total)} `, t("draft.complete"), ` · ${String(missing)} `, t("draft.missing")] }),
-				] }),
-				(0, react_jsx_runtime.jsx)("div", { className: "rq-draftHint", children: t("draft.hint") }),
+			return (0, react_jsx_runtime.jsx)("div", { className: "rq-frame", children: (0, react_jsx_runtime.jsxs)("div", { className: "rq-draftStrip", children: [
+				(0, react_jsx_runtime.jsx)("span", { className: "rq-chip", children: t("draft.eyebrow") }),
+				(0, react_jsx_runtime.jsx)("span", { className: "rq-draftTitle", children: draft.title ?? draft.slug }),
+				(0, react_jsx_runtime.jsx)("span", { className: "rq-chip", children: t(`draft.status.${draft.status ?? "building"}`) }),
+				(0, react_jsx_runtime.jsx)("span", { className: "rq-bar rq-draftBar", style: { width: "64px" }, children: (0, react_jsx_runtime.jsx)("div", { className: "rq-barFill", style: { width: `${String(pct)}%` } }) }),
+				(0, react_jsx_runtime.jsxs)("span", { className: "rq-draftCounts", children: [`${String(done)}/${String(total)} `, t("draft.complete"), missing > 0 ? ` · ${String(missing)} ${t("draft.missing")}` : ""] }),
+				(0, react_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "rq-iconButton",
+					"aria-label": t("draft.dismiss"),
+					title: t("draft.dismiss"),
+					onClick: () => {
+						const value = { revision: draft.revision, status: draft.status };
+						saveDraftDismissal(draft.slug, value);
+						setOverride({ slug: draft.slug, revision: draft.revision, status: draft.status, hidden: true });
+					},
+					children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCloseOutline16, {}),
+				}),
 			] }) });
 		}
 		/**
-		* Composer occupant: the wizard for a pending survey, or the builder
-		* draft card for the conversation's active draft. Either way the claim
-		* is a COLUMN, not an orphan container: the ambient input dock (todo
-		* pill / tracking board / goal bar) renders above the card with the
-		* composer stack's own rhythm — the composer zone keeps its shape,
-		* only the input card is replaced.
+		* Composer occupant: the wizard for a pending survey. Either way the
+		* claim is a COLUMN, not an orphan container: the ambient input dock
+		* (todo pill / tracking board / goal bar) renders above the card with
+		* the composer stack's own rhythm — the composer zone keeps its
+		* shape, only the input card is replaced. Builder drafts do NOT
+		* occupy this column at all: they render as the DraftDock strip in
+		* conversation.input.dock so the build stage never erases the
+		* composer's own chrome (input, tools, model picker, ring, stats).
 		*/
 		function SurveyComposer(props) {
-			// Live draft data: the platform's matched prop can lag a
-			// draft/updated frame, so a draft seat re-derives from the store on
-			// every notify (this subscription keeps the component current).
+			// Keeps the wizard current when a draft/updated(launched) and
+			// survey/requested arrive back-to-back (matched can lag the store).
 			(0, react.useSyncExternalStore)(surveyStore.subscribe, surveyStore.getVersion);
-			let matched = props.matched;
-			if (matched != null && matched.surveyId === undefined) {
-				// A launched survey outranks the card: draft/updated(launched) and
-				// survey/requested arrive back-to-back, and the stale building
-				// card must not hold the seat while the wizard is answerable.
-				const pending = surveyStore.get(matched.conversationId);
-				if (pending !== undefined) matched = pending;
-				else {
-					const fresh = surveyStore.draftFor(matched.conversationId);
-					matched = fresh !== undefined ? fresh : null;
-				}
-			}
-			// selectSurvey returns null (not undefined) when the viewed session
-			// has nothing to claim — guard BOTH, or the key read crashes and
-			// React unmounts the whole composer seat.
+			const matched = props.matched;
 			if (matched == null) return null;
 			// The ambient dock re-render (authorized by the entry's children
 			// declaration): renderSlot is absent in bare-mount harnesses, so
@@ -1497,20 +1480,13 @@ a.rq-source:hover{text-decoration:underline}
 			const dock = typeof props.renderSlot === "function"
 				? props.renderSlot("conversation.input.dock", { session: props.session })
 				: null;
-			// Draft frames (builder card) carry slug; survey entries carry surveyId.
-			if (matched.surveyId === undefined) {
-				return (0, react_jsx_runtime.jsxs)("div", {
-					className: "rq-claim",
-					children: [
-						dock,
-						(0, react_jsx_runtime.jsx)(SurveyBoundary, {
-							t: props.t,
-							key: `draft-${String(matched.slug)}`,
-							children: (0, react_jsx_runtime.jsx)(DraftCard, { draft: matched, t: props.t }),
-						}),
-					],
-				});
-			}
+			// The election can lag one render behind a minimize toggle: decline
+			// here so the seat never shows a minimized survey's wizard.
+			if (matched.surveyId !== undefined && isSurveyMinimized(matched.surveyId) === true) return null;
+			// Drafts no longer route here — the DraftDock strip in
+			// conversation.input.dock carries the build stage; anything without
+			// a surveyId cannot hold the seat.
+			if (matched.surveyId === undefined) return null;
 			// key by surveyId so a follow-up survey in the same session remounts with fresh drafts
 			return (0, react_jsx_runtime.jsxs)("div", {
 				className: "rq-claim",
@@ -1549,11 +1525,13 @@ a.rq-source:hover{text-decoration:underline}
 		//#endregion
 		//#region lib/index.js
 		/**
-		* Chain routing: a pending survey claims the composer seat (the wizard);
-		* otherwise the conversation's active builder draft occupies it as the
-		* tracker card — the operator's in-space rule. Both beat the fallback
-		* input, which yields (overlay fallback is display:none) whenever an
-		* occupant claims.
+		* Chain routing: only a PENDING SURVEY claims the composer seat (the
+		* wizard — the approved input-area replacement). Builder drafts never
+		* claim: the build stage must not erase the composer's own chrome
+		* (input, tools, model picker, context ring, stats dock) — the draft
+		* renders as a strip inside the composer via conversation.input.dock.
+		* A minimized survey declines so the plain input returns; the
+		* composer-dock reopener carries the way back.
 		*/
 		function selectSurvey({ session }) {
 			const sessionId = session?.sessionId;
@@ -1561,11 +1539,12 @@ a.rq-source:hover{text-decoration:underline}
 			const pending = surveyStore.get(sessionId);
 			// MINIMIZED: the survey releases the composer entirely — the real
 			// chat input and the ambient dock return, and the dock FAB owns
-			// reopening. A builder draft may still claim the seat.
-			if (pending !== undefined && isSurveyMinimized(pending.surveyId) === true) {
-				return surveyStore.draftFor(sessionId) ?? null;
-			}
-			return pending ?? surveyStore.draftFor(sessionId) ?? null;
+			// reopening.
+			if (pending !== undefined && isSurveyMinimized(pending.surveyId) === true) return null;
+			// Builder drafts never claim the seat: the build stage renders as
+			// the input.dock strip, so the composer's own chrome (input, tools,
+			// model picker, ring, stats dock) stays whole.
+			return pending ?? null;
 		}
 		const inject = ["slots", "locale"];
 		/**
@@ -1613,6 +1592,15 @@ a.rq-source:hover{text-decoration:underline}
 				select: selectSurvey,
 				locale: NS
 			}, SurveyComposer));
+			// The build-stage draft strip rides INSIDE the composer chrome
+			// (input.dock renders full-width entries above the composer card),
+			// so the composer's own UI survives the build stage untouched.
+			ctx.slots.inject("conversation.input.dock", () => ctx.slots.register({
+				name: "conversation.input.dock",
+				order: 5,
+				locale: NS,
+				inject: (zone) => ({ sessionId: zone?.session?.sessionId })
+			}, DraftDock));
 		}
 		exports.apply = apply;
 		exports.inject = inject;

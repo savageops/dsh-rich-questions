@@ -54,7 +54,6 @@ function loadClient() {
     constructor() { eventSource = this; this.onmessage = null; this.onerror = null }
     close() {}
   }
-  const sandboxWindow = { setInterval: () => 0 }
   const fakeHead = { appendChild: () => {} }
   const sandboxDocument = {
     addEventListener: () => {},
@@ -64,7 +63,12 @@ function loadClient() {
     body: fakeHead,
   }
   let loaded = null
+  /** The window the bundle CAPTURES as its parameter — the test reads and
+   * asserts against this same object, since load-time globals are restored
+   * before component calls run. */
   const shimWindow = {
+    setInterval: () => 0,
+    localStorage: { _m: {}, getItem(k) { return k in this._m ? this._m[k] : null }, setItem(k, v) { this._m[k] = String(v) }, removeItem(k) { delete this._m[k] } },
     __ModuleLoader__: {
       load: (spec) => {
         const require = (name) => {
@@ -78,27 +82,16 @@ function loadClient() {
       },
     },
   }
-  const globals = {
-    window: Object.assign(shimWindow, shimWindow),
-    document: sandboxDocument,
-    EventSource: EventSourceStub,
-    fetch: async () => { throw new Error('network disabled in smoke test') },
-  }
-  const previous = {}
-  for (const key of Object.keys(globals)) { previous[key] = globalThis[key]; globalThis[key] = globals[key] }
-  try {
-    new Function('window', 'document', 'EventSource', 'fetch', bundleSource)(
-      shimWindow, sandboxDocument, EventSourceStub, globals.fetch)
-  } finally {
-    for (const key of Object.keys(previous)) globalThis[key] = previous[key]
-  }
+  new Function('window', 'document', 'EventSource', 'fetch', bundleSource)(
+    shimWindow, sandboxDocument, EventSourceStub,
+    async () => { throw new Error('network disabled in smoke test') })
   assert.ok(loaded, 'bundle registered itself')
   assert.equal(loaded.id, 'dsh-rich-questions')
   const emit = (frame) => {
     assert.ok(eventSource, 'store started an EventSource')
     eventSource.onmessage({ data: JSON.stringify(frame) })
   }
-  return { mod: loaded.mod, emit }
+  return { mod: loaded.mod, emit, window: shimWindow }
 }
 
 /** apply() against a stub ctx, capturing slot registrations. */
@@ -178,4 +171,43 @@ test('resolution and fresh surveys clear stale minimize flags', () => {
 
   emit({ type: 'survey/requested', sessionId: 's1', surveyId: 'sv2', spec: SPEC, createdAt: 2 })
   assert.equal(composer.select(owner)?.surveyId, 'sv2', 'a NEW survey claims fresh — stale minimize never shadows it')
+})
+
+test('builder drafts blend into the composer: no seat claim, strip in input.dock', () => {
+  const { mod, emit, window: shimWin } = loadClient()
+  // loadDraftDismissal reads the bundle's captured window — the shim above.
+  const regs = applySlots(mod)
+  const composer = regs.find(r => r.name === 'conversation.composer')
+  const inputDock = regs.find(r => r.name === 'conversation.input.dock')
+  assert.ok(inputDock && typeof inputDock.component === 'function', 'input.dock entry registered')
+  const owner = { session: { sessionId: 's1' } }
+
+  emit({ type: 'draft/updated', slug: 'd1', conversationId: 's1', status: 'building', revision: 2, title: 'Onboarding', progress: { questions: 5, complete: 3, missingFields: 1 }, updatedAt: 1 })
+  assert.equal(composer.select(owner), null, 'a draft never claims the composer seat')
+
+  const strip = inputDock.component({ sessionId: 's1', t: (k) => k })
+  assert.ok(strip, 'strip rendered while building')
+  const tree = JSON.stringify(strip)
+  assert.ok(tree.includes('Onboarding') && tree.includes('building'), 'title + status in strip')
+  assert.ok(tree.includes('3/5'), 'progress counts in strip')
+
+  // dismiss (X) removes the strip; a new builder revision brings it back
+  const findX = (node) => {
+    if (!node || typeof node !== 'object') return null
+    if (node.props && node.props['aria-label'] === 'draft.dismiss') return node
+    for (const child of [node.children, node.props && node.props.children].flat(4)) {
+      const hit = findX(child)
+      if (hit) return hit
+    }
+    return null
+  }
+  const x = findX(strip)
+  assert.ok(x, 'dismiss button present')
+  x.props.onClick()
+  const after = inputDock.component({ sessionId: 's1', t: (k) => k })
+  assert.equal(after, null, 'dismissed strip gone')
+  assert.match(shimWin.localStorage.getItem('dsh-rich-questions/draft-dismiss/d1'), /revision/, 'dismissal persisted')
+
+  emit({ type: 'draft/updated', slug: 'd1', conversationId: 's1', status: 'building', revision: 3, progress: { questions: 5, complete: 4, missingFields: 0 }, updatedAt: 2 })
+  assert.ok(inputDock.component({ sessionId: 's1', t: (k) => k }), 'a new revision re-shows the strip')
 })
