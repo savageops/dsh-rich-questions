@@ -184,28 +184,61 @@ export function createDraftStore({ workspaceRoot, profileRoot, structureQuestion
         // `sources` inside an option patch replaces the option's whole
         // list — send the complete list you want.
         const previous = node.options ?? []
-        const count = Math.max(previous.length, patchNode.options.length)
-        const nextOptions = []
-        for (let index = 0; index < count; index += 1) {
+        // Option patches join by KEY when both sides carry keys (identity,
+        // not position — a patch authored in a different order can never
+        // land its fields on the wrong option), falling back to index for
+        // keyless patches. An unknown key is refused loudly: a silent
+        // append would strand a patch option outside the validated graph.
+        const keyedPrevious = new Map()
+        for (const option of previous) {
+          if (typeof option?.key === 'string' && option.key !== '') keyedPrevious.set(option.key, option)
+        }
+        const patchIsKeyed = patchNode.options.some((option) => typeof option?.key === 'string' && option.key !== '')
+        if (patchIsKeyed && keyedPrevious.size === 0) {
+          ignored.push(`${id}.options patch carries keys but the stored options have none — merged by index`)
+        }
+        const nextOptions = [...previous]
+        const usedIndexes = new Set()
+        for (let index = 0; index < patchNode.options.length; index += 1) {
           const option = patchNode.options[index]
-          if (option === undefined) {
-            nextOptions.push(previous[index])
-            continue
-          }
-          if (option === null || typeof option !== 'object') {
+          if (option === null || option === undefined || typeof option !== 'object') {
             ignored.push(`${id}.options[${index}] (non-object entry)`)
-            nextOptions.push(previous[index] ?? { label: `TODO: label ${index + 1}` })
             continue
           }
-          const optionNextError = nextShapeError(option.next, `${id}.options[${index}]`)
+          const optionWhere = typeof option.key === 'string' && option.key !== ''
+            ? `${id}.options key "${option.key}"`
+            : `${id}.options[${index}]`
+          const optionNextError = nextShapeError(option.next, optionWhere)
           if (optionNextError !== null) nextErrors.push(optionNextError)
+          let targetIndex = index
+          if (patchIsKeyed && keyedPrevious.size > 0) {
+            if (typeof option.key !== 'string' || option.key === '') {
+              nextErrors.push(`${optionWhere}: keyed option patches require a key on every entry`)
+              continue
+            }
+            const found = keyedPrevious.get(option.key)
+            if (found === undefined) {
+              // A new key GROWS the list (the documented append path) — an
+              // unknown key is additive, never positional.
+              targetIndex = nextOptions.length
+            } else {
+              targetIndex = previous.indexOf(found)
+              if (usedIndexes.has(targetIndex)) {
+                nextErrors.push(`${id}.options key "${option.key}" patches the same option twice`)
+                continue
+              }
+            }
+          }
+          usedIndexes.add(targetIndex)
           const { next, ...content } = option
-          const merged = { ...(previous[index] ?? {}), ...content }
+          const merged = { ...(previous[targetIndex] ?? {}), ...content }
           if (option.next !== undefined) merged.next = option.next
-          nextOptions.push({
+          nextOptions[targetIndex] = {
             ...merged,
-            label: typeof merged.label === 'string' && merged.label.trim() !== '' ? merged.label : previous[index]?.label ?? `TODO: label ${index + 1}`,
-          })
+            label: typeof merged.label === 'string' && merged.label.trim() !== ''
+              ? merged.label
+              : previous[targetIndex]?.label ?? `TODO: label ${targetIndex + 1}`,
+          }
         }
         node.options = nextOptions
       }

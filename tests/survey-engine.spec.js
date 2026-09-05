@@ -55,7 +55,7 @@ test('an unreachable quick answer names the path the branch actually reaches', (
   const result = validateSpec(spec)
   assert.equal(result.ok, false)
   const message = result.errors.join(' ')
-  assert.match(message, /q2b" which this template's own selections never reach/)
+  assert.match(message, /never reach — q2b/)
   assert.match(message, /reaches only: q1, q2a, q3/)
 })
 

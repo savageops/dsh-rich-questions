@@ -100,6 +100,15 @@ export function validateSpec(raw, limits = {}) {
   const maxQuick = limits.maxQuick ?? 6
   const errors = []
   const fail = (message) => errors.push(message)
+  // Aggregated violation collectors: one compact id-list message per rule
+  // beats N copies of the same sentence — a 30-question skeleton must not
+  // produce a 17-line wall of identical "minimum 5 options" errors.
+  const shortOptionIds = []
+  const emitAggregates = () => {
+    if (shortOptionIds.length > 0) {
+      fail(`${shortOptionIds.length} question${shortOptionIds.length === 1 ? '' : 's'} below the 5-option minimum ${shortOptionIds.length === 1 ? 'has' : 'have'} too few options — ${shortOptionIds.join(', ')} (keys a-e; the free-text input row is separate and not counted). If a question genuinely has fewer stances, fold it into another question; never pad with filler options.`)
+    }
+  }
   /** Shared by regular options and quick templates: sources array shape. */
   const checkSources = (where, sources) => {
     if (typeof sources === 'string') { fail(`${where}.sources must be an array of strings`); return }
@@ -154,7 +163,7 @@ export function validateSpec(raw, limits = {}) {
       if (!Array.isArray(node.options)) fail(`${where}.options must be an array`)
       else {
         if (node.options.length > maxOptions) fail(`${where} has ${node.options.length} options (limit ${maxOptions})`)
-        if (node.options.length < 5) fail(`${where} has ${node.options.length} options — minimum 5 (keys a-e; the free-text input row is separate and not counted). If a question genuinely has fewer stances, fold it into another question; never pad with filler options.`)
+        if (node.options.length < 5) shortOptionIds.push(`${id} (${node.options.length})`)
         node.options.forEach((option, index) => {
           const oWhere = `${where}.options[${index}]`
           if (typeof option !== 'object' || option === null) { fail(`${oWhere} must be an object`); return }
@@ -228,8 +237,9 @@ export function validateSpec(raw, limits = {}) {
         // questions asked" promise silently submits those as skipped.
         if (errors.length === 0) {
           const path = computePath({ entry, questions }, quickAnswersById)
-          for (const id of path) {
-            if (quickAnswersById.has(id) === false) fail(`${qWhere} does not answer "${id}", which its implied branch reaches — a quick template must cover every question it reaches`)
+          const uncovered = path.filter((id) => quickAnswersById.has(id) === false)
+          if (uncovered.length > 0) {
+            fail(`${qWhere} does not answer ${uncovered.length} question${uncovered.length === 1 ? '' : 's'} its implied branch reaches — ${uncovered.join(', ')}. A quick template must cover every question it reaches`)
           }
         }
         // A template may only answer questions its own selections actually
@@ -244,8 +254,9 @@ export function validateSpec(raw, limits = {}) {
         if (reachableSet.size === 0) {
           fail(`${qWhere}.answers must include the entry question "${entry}" (with the option keys that start the branch) — without it no question is reachable and every answer in this template is dead weight`)
         }
-        for (const questionId of Object.keys(quickOption.answers)) {
-          if (!reachableSet.has(questionId)) fail(`${qWhere}.answers includes "${questionId}" which this template's own selections never reach — its branch reaches only: ${reachable.length > 0 ? reachable.join(', ') : '(nothing)'}. Remove it, or change the selected keys so the branch passes through "${questionId}"`)
+        const unreachable = Object.keys(quickOption.answers).filter((questionId) => !reachableSet.has(questionId))
+        if (unreachable.length > 0) {
+          fail(`${qWhere}.answers includes ${unreachable.length} question${unreachable.length === 1 ? '' : 's'} its own selections never reach — ${unreachable.join(', ')}. This template's branch reaches only: ${reachable.length > 0 ? reachable.join(', ') : '(nothing)'}. Remove them, or change the selected keys so the branch passes through those questions`)
         }
       })
     }
@@ -286,6 +297,7 @@ export function validateSpec(raw, limits = {}) {
     }
   }
 
+  emitAggregates()
   if (errors.length > 0) return { ok: false, errors }
 
   // Cycle detection over the full edge graph (worst case: every option edge).

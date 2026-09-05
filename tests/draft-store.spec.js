@@ -157,6 +157,36 @@ test('structure default cap fits the Push math: a 45-question graph lands (21 do
   assert.equal(Object.keys(big.draft.survey.questions).length, 45)
 })
 
+test('keyed option patches join by key regardless of order — labels never scramble', async () => {
+  const { store } = await freshStore()
+  const { draft } = await store.begin({ conversationId: 'conv-1', title: 'T', survey: skeleton() })
+  const fleshed = await store.patch({ slug: draft.slug, questions: { q1: { prompt: 'Pick?', options: fiveKeys.map((key) => ({ key, label: `L${key}`, description: `why ${key}`, sources: ['old/ref'] })) } } })
+  assert.equal(fleshed.ok, true)
+
+  // Sent in REVERSED order: under index-merge this used to land 'e' fields on 'a'.
+  const reversed = [...fiveKeys].reverse()
+  const merged = await store.patch({ slug: draft.slug, questions: { q1: { options: reversed.map((key) => ({ key, next: key === 'a' ? null : undefined })) } } })
+  assert.equal(merged.ok, true)
+  const options = merged.draft.survey.questions.q1.options
+  for (const option of options) {
+    assert.equal(option.label, `L${option.key}`, `label scrambled on key ${option.key}`)
+    assert.equal(option.description, `why ${option.key}`, `description scrambled on key ${option.key}`)
+  }
+  assert.equal(options[0].next, null, 'the next landed on the wrong option')
+  assert.equal(options[4].next, undefined, 'next leaked onto an option that sent none')
+})
+
+test('a keyed patch with a new key appends instead of refusing', async () => {
+  const { store } = await freshStore()
+  const { draft } = await store.begin({ conversationId: 'conv-1', title: 'T', survey: skeleton() })
+  const grown = await store.patch({ slug: draft.slug, questions: { q1: { options: [{ key: 'f', label: 'New stance', description: 'fresh' }] } } })
+  assert.equal(grown.ok, true, grown.error ?? '')
+  const options = grown.draft.survey.questions.q1.options
+  assert.equal(options.length, 6)
+  assert.equal(options.at(-1).key, 'f')
+  assert.equal(options.at(-1).label, 'New stance')
+})
+
 test('option patches merge per-field: a sources-only patch keeps the prose', async () => {
   const { store } = await freshStore()
   const { draft } = await store.begin({ conversationId: 'conv-1', title: 'T', survey: skeleton() })

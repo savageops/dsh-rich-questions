@@ -15,7 +15,7 @@
  * builtins only (local-plugin convention).
  */
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { resolve, relative, isAbsolute, join } from 'node:path'
@@ -79,6 +79,7 @@ const ANNOUNCEMENT_EN = [
   "THE LOOP (research-first) — study 9-12 comparable systems BEFORE locking structure and write it down (findings → .docs/research/, digests → .docs/digest/, rips → .docs/research/rips/, source → .refs/ — unwritten research did not happen). begin the skeleton → enrich via op=patch (≤3 questions/call; patch also adds new ids and rewires .next; any op can read its payload from a workspace JSON file via file=) → survey_draft_get is the launch gate: checklist empty → survey_draft_launch.",
   "THE BAR (floor; the launch gate enforces it) — orienting intro (what this decides, why now, what happens with answers); self-contained prompts (every term defined in place); ≥5 stance-differentiated options per question (never filler, never “Option A”); insight rows naming a real-world proven use, the tradeoff, and a current-state handle; branch wherever an answer changes what follows; all user-facing copy in the user's chat language, option keys short ASCII.",
   "THE FEEL (handling the human) — when results return, open by restating the user's stance in one line (“You chose X over Y because Z, so I will…”); trace landed decisions back to their answers; NEVER re-ask what a survey or survey_records already answered; when an answer surprises you, ask why — a stated why is intent you can act on. Pre-flight picks (reroll/push/discuss) return with an instruction field — follow it.",
+  "THE INSIGHT FORMAT (imitate this — one enriched option, from this plugin's own shipped survey) — insight is 3-5 markdown list rows, each led by a MEANINGFUL content label (Pattern / Proven at / Breaks when / Here now — labels vary with what the option needs; never a fixed generic triple). Worked: “- **Pattern:** ask-time memory injection — settled records are read at survey authoring, not at runtime.\n- **Proven at:** the context plugins resolve per-session data through provide contributions this way in production; survey_records (v0.3.0) already reads the settled store.\n- **Breaks when:** records outnumber relevance — fifty settled surveys later, injection needs ranking, not raw replay.\n- **Here now:** SurveyHostService.ask (src/host.js) has no injection seam; 2 settled records sit in ~/.dsh/rich-questions/surveys/ unread.” — four rows, four checkable claims: one names a real-world proven use (system + what happened), one states the tradeoff or break condition, one gives the current-state handle (file path / number / record). A one-word-label row (“Proven: X”) is as shallow as a paragraph. Sources on every option: file-level or product-level citations, not bare URLs.",
 ].join("\n\n")
 
 const ANNOUNCEMENT_ZH = [
@@ -707,7 +708,12 @@ function draftToolDefinitions(ctx, service, structureQuestionCap) {
   })
   const setTool = {
     name: 'survey_draft_set',
-    description: 'Builder write (research the 9-12 comparables first — see the plugin section / skill). op=begin: lock the skeleton {title, survey:{entry, questions}} — ids, >=5 option keys per option-bearing question (labels/prompts may be TODO stubs), branch wiring validated on the spot; the draft title defaults the survey title. op=patch: at most 3 questions per call, each a per-field MERGE — send only what changes. EXISTING ids: prose + option fields (label/description/insight/sources — per-option sources replaces that option\'s whole source list) AND branch wiring (question .next and option .next: a question id, an array of ids, or null = branch ends; validated against the graph on every patch). NEW ids: added as draft-grade questions (prompt/options may be TODO stubs, >=5 options) — grow the graph incrementally, no whole-structure resend. Plus draft-level intro and quick (authored LAST over finished questions; two-way coverage rule enforced). op=structure: replace the whole graph — allowed while the incoming graph stays under 150 questions; bumps revision; use when research reshapes the skeleton or options must be reordered/removed. op=discard: retire the active draft. file=: any op may point at a workspace JSON file carrying the payload fields ({title?, grounding?, survey?, questions?, intro?, quick?}) instead of inlining them — write the file once with your file tool, re-run the same call after errors, inline fields win over file fields. Loop [research → patch] until survey_draft_get reports zero gaps, then launch.',
+    description: [
+      'Builder write. Research the 9-12 comparables first — the plugin system-prompt section carries the doctrine with a worked insight example.',
+      'RULES THE GATE ENFORCES (all violations return together — fix every listed id in one pass): every option-bearing question carries >=5 options (keys a-e; the free-text row is not an option; fewer real stances = fold the question); patches carry at most 3 questions per call; quick templates answer exactly the questions their own selections reach — no more, no less.',
+      'op=begin: lock the skeleton {title, survey:{entry, questions}} — ids, option keys, branch wiring; prompts/labels may be TODO stubs; the whole skeleton is validated at once, so expect the complete offender list back. op=patch: per-field MERGE — send only what changes. Option patches join BY KEY: a patch option with key "b" merges onto stored option "b" whatever the order; a key not yet stored APPENDS as a new option; stored prose is never wiped by omission. sources inside an option patch replaces the entire sources list of that option. .next (question-level and per-option) patches like any field: a question id, an id array, or null = branch ends. NEW question ids in a patch land as draft-grade adds. Draft-level intro and quick come here too (authored LAST over finished questions). op=structure: replace the whole graph (reorder/remove options; under 150 questions; bumps revision). op=discard: retire the draft.',
+      'file=: any op may point at a workspace JSON file carrying {title?, grounding?, survey?, questions?, intro?, quick?} — write the file once with your file tool, re-run the same call after errors; inline fields win. Loop [research → patch] until survey_draft_get reports zero gaps, then launch.',
+    ].join(' '),
     parameters: {
       type: 'object',
       required: ['op'],
@@ -718,7 +724,7 @@ function draftToolDefinitions(ctx, service, structureQuestionCap) {
         grounding: { type: 'string', enum: ['standard', 'internal'], description: 'op=begin: grounding-bar mode. standard (default): launch requires every option to cite a source and every question to cite a comparison target (file path or URL). internal: skips the comparison half for surveys with no competitors.' },
         survey: { type: 'object', description: 'op=begin/structure: the survey skeleton {title?, intro?, entry, questions} — same shape ask_survey takes; prompts/labels may be "TODO:" stubs, structure must validate.' },
         slug: { type: 'string', description: 'op=patch/structure/discard: target draft; omit to use the conversation active draft.' },
-        questions: { type: 'object', description: 'op=patch: map of question id -> content patch {prompt?, header?, detail?, multiSelect?, allowCustom?, skippable?, next?, options?}. Option patches MERGE per-field against the option at the same index — send only what changes, lists may be partial (untouched tail options survive); the structure op replaces options wholesale. next (question-level and per-option) is patchable: a question id, an array of ids, or null = branch ends; every target must exist. An id not yet in the draft is ADDED as a draft-grade question (TODO stubs allowed).' },
+        questions: { type: 'object', description: 'op=patch: map of question id -> content patch {prompt?, header?, detail?, multiSelect?, allowCustom?, skippable?, next?, options?}. Option patches join BY KEY when they carry one (key "b" merges onto stored option "b" regardless of order; a new key appends; keyless entries fall back to position); every patch option in one list must then carry a key. The structure op replaces options wholesale. next (question-level and per-option) is patchable: a question id, an array of ids, or null = branch ends; every target must exist. An id not yet in the draft is ADDED as a draft-grade question (TODO stubs allowed).' },
         intro: { type: 'string', description: 'op=patch: set the survey intro (markdown first page).' },
         quick: { type: 'array', maxItems: 6, items: { type: 'object' }, description: 'op=patch: replace the quick templates — same shape as ask_survey quick [{key, label, description?, insight?, recommended?, answers: {qid: {selected}}}]. Author them last, over finished questions.' },
         file: { type: 'string', description: "Any op: workspace-relative path to a JSON file carrying this op's payload fields ({title?, grounding?, survey?, questions?, intro?, quick?}) instead of inlining. Built for big graphs: write the file once with your file tool, then iterate ops against the path — after an error, re-running the SAME call re-reads the file; inline fields win over file fields." },
@@ -976,6 +982,37 @@ function recordsToolDefinition(ctx) {
   }
 }
 
+/**
+ * Register the packaged authoring doctrine as a runtime skill so the
+ * environment's skill tool finds "rich-questions-authoring" wherever this
+ * plugin mounts (the workspace-level copy exists only in this repo). The
+ * announcement inlines the essentials, so a missing skills service degrades
+ * to "no skill entry", never to a broken onboarding pointer.
+ * @param {import('@deepseek-ai/cordis').Context} ctx - host plugin context.
+ */
+function registerAuthoringSkill(ctx) {
+  if (typeof ctx?.inject !== 'function') return
+  let body = ''
+  try {
+    body = readFileSync(new URL('../skills/rich-questions-authoring/SKILL.md', import.meta.url), 'utf8')
+  } catch (error) {
+    console.warn(`[dsh-rich-questions] authoring skill body unreadable (${String(error.message ?? error)}) — the inlined announcement doctrine stands alone`)
+    return
+  }
+  const frontmatter = /^---\n([\s\S]*?)\n---\n/.exec(body)
+  const name = /name:\s*(.+)/.exec(frontmatter?.[1] ?? '')?.[1]?.trim() ?? 'rich-questions-authoring'
+  const description = /description:\s*(.+)/.exec(frontmatter?.[1] ?? '')?.[1]?.trim()
+    ?? 'The full authoring doctrine for dsh-rich-questions surveys.'
+  const content = body.slice(frontmatter ? frontmatter[0].length : 0)
+  ctx.inject(['skills'], (skillsCtx) => {
+    try {
+      skillsCtx.skills.register({ name, description, content })
+    } catch (error) {
+      console.warn(`[dsh-rich-questions] authoring skill registration refused (${String(error.message ?? error)})`)
+    }
+  })
+}
+
 export function apply(ctx, config = {}) {
   const service = new SurveyHostService()
   const structureQuestionCap = Number.isFinite(config?.structureQuestionCap) ? config.structureQuestionCap : 150
@@ -997,6 +1034,7 @@ export function apply(ctx, config = {}) {
     order: 200,
     text: ANNOUNCEMENT,
   })
+  registerAuthoringSkill(ctx)
   ctx.tools.register(surveyToolDefinition(ctx, service))
   for (const definition of draftToolDefinitions(ctx, service, structureQuestionCap)) ctx.tools.register(definition)
   ctx.tools.register(recordsToolDefinition(ctx))

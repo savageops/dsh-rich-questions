@@ -1,6 +1,6 @@
 {
   "name": "dsh-rich-questions",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Rich branching survey system for DeepSeek Harness (DSH) Web GUI: the ask_survey tool extends the flat ask_user_question flow — up to 150 questions, per-option branching (select C -> a different range of questions follows), delayed hover insights with sources, expandable Mermaid diagrams, multi-select, free-text, quick mode (one-click whole-survey answer templates), and reroll/push/discuss pre-flight actions. Host-authoritative pending surveys, rendered as a wizard in the same conversation composer seat.",
   "keywords": [
     "deepseek-harness",
