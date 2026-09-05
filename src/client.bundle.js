@@ -350,6 +350,7 @@ return {
 			"quick.chip": "快速模式",
 			"quick.title": "快速模式",
 			"quick.subtitle": "选择最贴近你目标的一项，自动套用全部答案并直接提交。",
+			"error.quickEmpty": "该快速模板不包含任何答案——请直接逐题作答。",
 			"action.skip": "跳过",
 			"action.skip.hint": "本题不作答，直接进入下一题。",
 			"action.bank": "暂存并继续",
@@ -406,6 +407,7 @@ return {
 			"action.quick.hint": "Condense this survey into up to 6 decision templates — pick one to auto-fill every answer and submit immediately, no question-by-question walk.",
 			"quick.chip": "Quick mode",
 			"quick.title": "Quick mode",
+			"error.quickEmpty": "This quick template carries no answers — answer the survey directly instead.",
 			"quick.subtitle": "Pick whichever is closest to what you want — it auto-fills every answer and submits right away.",
 			"action.skip": "Skip",
 			"action.skip.hint": "Leave this question unanswered and move on.",
@@ -1051,6 +1053,7 @@ a.rq-source:hover{text-decoration:underline}
 					return {
 						id: questionId,
 						selected: finalSelected,
+						...(value?.skipped === true && finalSelected.length === 0 && custom === "" ? { skipped: true } : {}),
 						...custom === "" ? {} : { custom },
 						...Object.keys(justifications).length > 0 ? { justifications } : {}
 					};
@@ -1113,6 +1116,14 @@ a.rq-source:hover{text-decoration:underline}
 					custom: typeof answer?.custom === "string" ? answer.custom : "",
 					skipped: false
 				};
+				// An empty (or all-hollow) template answers map would submit an
+				// answer carrying nothing — refuse it here so the survey stays
+				// open with a visible error instead of settling all-skipped.
+				const hasSubstance = Object.values(quickDrafts).some((draft) => draft.selected.length > 0 || draft.custom.trim() !== "");
+				if (!hasSubstance) {
+					setError(t("error.quickEmpty"));
+					return;
+				}
 				submitWith(quickDrafts);
 			};
 			const advance = () => {

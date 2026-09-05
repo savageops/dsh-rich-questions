@@ -559,6 +559,7 @@ export function validateAnswers(spec, answers) {
     if (typeof id !== 'string' || Object.hasOwn(spec.questions, id) === false) { errors.push(`answers id "${String(id)}" names no question`); continue }
     if (seen.has(id)) { errors.push(`answers repeat question "${id}"`); continue }
     seen.add(id)
+    if (answer.skipped !== undefined && answer.skipped !== true) { errors.push(`answers for "${id}": skipped must be true when present`); continue }
     if (!Array.isArray(selected) || !selected.every((key) => typeof key === 'string')) { errors.push(`answers for "${id}": selected must be an array of option keys`); continue }
     if (new Set(selected).size !== selected.length) { errors.push(`answers for "${id}" repeat an option key`); continue }
     const node = spec.questions[id]
@@ -589,7 +590,7 @@ export function validateAnswers(spec, answers) {
         if (Object.keys(kept).length > 0) justifications = kept
       }
     }
-    clean.push({ id, selected, ...(trimmed === '' ? {} : { custom: trimmed }), ...(justifications !== undefined ? { justifications } : {}) })
+    clean.push({ id, selected, ...(answer.skipped === true ? { skipped: true } : {}), ...(trimmed === '' ? {} : { custom: trimmed }), ...(justifications !== undefined ? { justifications } : {}) })
   }
   if (errors.length > 0) return { ok: false, errors }
   return { ok: true, answers: clean }

@@ -192,6 +192,28 @@ assert.deepEqual(answered.path, ['q1'])
 assert.equal(answered.draft, 'drive-test')
 assert.equal(answered.title, 'Drive Test', 'draft title should flow into the launched survey title')
 
+// --- Empty-submission guard (regression: a hollow quick-template click used
+// to settle the survey as answered with every question skipped and zero
+// answers). The host must refuse a submission carrying neither selections
+// nor explicit skips, keeping the survey open; an explicit-skip-only
+// submission stays legitimate.
+const emptyLaunch = byName.get('survey_draft_launch').execute({ slug: 'drive-test' }, exec)
+emptyLaunch.catch(() => {})
+const emptySurveyId = await settle(() => {
+  const id = surveyIdFromFrames()
+  return id !== undefined && id !== surveyId ? id : false
+})
+assert.notEqual(emptySurveyId, undefined, 'second launch did not emit survey/requested')
+const hollow = await callAction({ kind: 'answer', surveyId: emptySurveyId, answers: [{ id: 'q1', selected: [] }] })
+assert.equal(hollow.ok, false, 'a zero-substance submission must be refused')
+assert.match(hollow.error, /carries no selections/)
+// Explicit skips carry substance of intent: an all-skip submission settles.
+const skipped = await callAction({ kind: 'answer', surveyId: emptySurveyId, answers: [{ id: 'q1', selected: [], skipped: true }] })
+assert.equal(skipped.ok, true, `explicit-skip submission failed: ${JSON.stringify(skipped)}`)
+const skippedResult = await emptyLaunch
+assert.equal(skippedResult.outcome, 'answered')
+assert.deepEqual(skippedResult.skipped, ['q1'], 'the skipped list must name the explicitly skipped question')
+
 const record = JSON.parse(await readFile(join(process.env.DSH_RICH_QUESTIONS_HOME, 'surveys', `${surveyId}.json`), 'utf8'))
 assert.equal(record.outcome, 'answered')
 assert.equal(record.title, 'Drive Test')
@@ -200,10 +222,12 @@ assert.ok(Array.isArray(record.answers) && record.answers.length === 1, 'settled
 // Memory: the records reader finds the settled survey whole (prompt +
 // labels + nothing injected anywhere — read-only by design).
 const recs = await byName.get('survey_records').execute({ query: 'drive' }, exec)
-assert.equal(recs.count, 1)
-assert.equal(recs.records[0].title, 'Drive Test')
-assert.equal(recs.records[0].answers[0].prompt, 'Inline wins?')
-assert.equal(recs.records[0].answers[0].selected[0], 'La')
+assert.equal(recs.count, 2, 'both settled surveys (the answered one and the all-skip regression one) are recorded')
+const answeredRecord = recs.records.find((entry) => entry.answers[0]?.selected?.length === 1)
+assert.ok(answeredRecord !== undefined, 'the answered record is present among the two')
+assert.equal(answeredRecord.title, 'Drive Test')
+assert.equal(answeredRecord.answers[0].prompt, 'Inline wins?')
+assert.equal(answeredRecord.answers[0].selected[0], 'La')
 const recsAll = await byName.get('survey_records').execute({}, exec)
 assert.ok(recsAll.count >= 1, 'unqueried read lists recent records')
 
@@ -212,7 +236,7 @@ const relaunchPromise = byName.get('survey_draft_launch').execute({ slug: 'drive
 relaunchPromise.catch((error) => console.error('relaunch rejected:', error instanceof Error ? `${error.code}: ${error.message.slice(0, 200)}` : error))
 const surveyId2 = await settle(() => {
   const latest = surveyIdFromFrames()
-  return latest !== undefined && latest !== surveyId ? latest : undefined
+  return latest !== undefined && latest !== surveyId && latest !== emptySurveyId ? latest : undefined
 })
 assert.notEqual(surveyId2, undefined)
 assert.notEqual(surveyId2, surveyId, 'relaunch must create a fresh pending survey')

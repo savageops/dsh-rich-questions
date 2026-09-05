@@ -232,6 +232,16 @@ class SurveyHostService {
     if (entry === undefined) return { ok: false, error: 'not-pending' }
     const check = validateAnswers(entry.spec, answers)
     if (!check.ok) return { ok: false, error: check.errors.join('; ') }
+    // An "answered" settlement must carry substance: at least one selection
+    // or custom answer, or at least one EXPLICIT skip. A submission with
+    // neither is leakage (an empty quick-template or a dropped draft set)
+    // masquerading as an answer — refusing it keeps the survey open with a
+    // draft-facing error instead of settling sixty hollow skipped entries.
+    const substantive = check.answers.filter((answer) => answer.selected.length > 0 || (answer.custom ?? '').trim() !== '').length
+    const explicitSkips = check.answers.filter((answer) => answer.skipped === true).length
+    if (substantive === 0 && explicitSkips === 0) {
+      return { ok: false, error: 'the submission carries no selections — nothing was picked, skipped, or written. Pick options (or skip questions explicitly) and submit again; a quick template must actually contain answers.' }
+    }
     const answersById = new Map(check.answers.map((answer) => [answer.id, { selected: answer.selected, custom: answer.custom }]))
     // Banked answers are a lock, not a suggestion (review P2): a submission
     // that omits or changes a banked answer is rejected, not silently applied.
